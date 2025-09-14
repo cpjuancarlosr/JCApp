@@ -27,8 +27,11 @@ function applyGlobalStyles() {
   const allSheets = ss.getSheets();
 
   allSheets.forEach(sheet => {
-    // Establece la fuente para toda la hoja
-    const range = sheet.getRange('A1:' + sheet.getMaxColumns() + sheet.getMaxRows());
+    // Establece la fuente para un rango de trabajo razonable para evitar exceder los límites de celdas.
+    // 2000 filas y 52 columnas (hasta AZ) es un rango amplio y seguro.
+    const rows = Math.min(sheet.getMaxRows(), 2000);
+    const cols = Math.min(sheet.getMaxColumns(), 52);
+    const range = sheet.getRange(1, 1, rows, cols);
     range.setFontFamily(FONT_FAMILY);
   });
 

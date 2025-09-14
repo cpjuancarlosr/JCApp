@@ -46,37 +46,46 @@ function generatePolicies() {
 }
 
 /**
- * Genera pólizas a partir de los datos de CFDI.
+ * Genera pólizas a partir de los datos de CFDI, buscando dinámicamente las cuentas de clientes/proveedores.
  * @param {Array<Array<any>>} xmlData Datos de la hoja XML.
  * @returns {Array<Array<any>>} Un array de filas de pólizas.
  */
 function generatePoliciesFromCfdi(xmlData) {
   const policies = [];
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+  // Crear un mapa de RFC a Cuenta Contable desde la hoja Entidades
+  const entidadesSheet = ss.getSheetByName(SHEETS.ENTITIES);
+  const entidadesData = entidadesSheet.getRange(2, 1, entidadesSheet.getLastRow() - 1, 4).getValues(); // RFC, Razon Social, Tipo, Cuenta Contable
+  const rfcToAccountMap = new Map(entidadesData.map(row => [row[0], row[3]]));
+
   const headers = xmlData.shift(); // Quitar encabezados
 
   xmlData.forEach(row => {
     const tipo = row[3]; // 'I', 'E', 'P'
-    const subtotal = parseFloat(row[7]);
-    const iva = parseFloat(row[8]);
-    const total = parseFloat(row[9]);
+    const subtotal = parseFloat(row[7]) || 0;
+    const iva = parseFloat(row[8]) || 0;
+    const total = parseFloat(row[9]) || 0;
     const uuid = row[0];
     const rfcEmisor = row[1];
     const rfcReceptor = row[2];
 
     if (tipo === 'I') { // Póliza de Ingreso (Venta)
+      const clienteAccount = rfcToAccountMap.get(rfcReceptor) || '105.00'; // Fallback a Clientes Generales
       // Cargo a Clientes (105.xx)
-      policies.push(createPolicyLine('Ingreso', uuid, '105.01', 'CLIENTES', total, 0));
-      // Abono a Ventas (401.01)
+      policies.push(createPolicyLine('Ingreso', uuid, clienteAccount, 'CLIENTES', total, 0));
+      // Abono a Ventas (401.01) - Hardcoded por ahora
       policies.push(createPolicyLine('Ingreso', uuid, '401.01', 'VENTAS GRAVADAS', 0, subtotal));
-      // Abono a IVA por Pagar (209.01)
+      // Abono a IVA por Pagar (209.01) - Hardcoded por ahora
       policies.push(createPolicyLine('Ingreso', uuid, '209.01', 'IVA TRASLADADO', 0, iva));
     } else if (tipo === 'E') { // Póliza de Egreso (Gasto/Compra)
-      // Cargo a Gastos/Compras (5xx.xx / 115.xx)
+      const proveedorAccount = rfcToAccountMap.get(rfcEmisor) || '201.00'; // Fallback a Proveedores Generales
+      // Cargo a Gastos/Compras (5xx.xx / 115.xx) - Hardcoded por ahora
       policies.push(createPolicyLine('Egreso', uuid, '501.01', 'GASTOS GENERALES', subtotal, 0));
-      // Cargo a IVA Acreditable (118.01)
+      // Cargo a IVA Acreditable (118.01) - Hardcoded por ahora
       policies.push(createPolicyLine('Egreso', uuid, '118.01', 'IVA ACREDITABLE', iva, 0));
       // Abono a Proveedores (201.xx)
-      policies.push(createPolicyLine('Egreso', uuid, '201.01', 'PROVEEDORES', 0, total));
+      policies.push(createPolicyLine('Egreso', uuid, proveedorAccount, 'PROVEEDORES', 0, total));
     }
   });
 
