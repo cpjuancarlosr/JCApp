@@ -1,16 +1,112 @@
 <!DOCTYPE html>
 <html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f8f9fa;
+        margin: 0;
+        padding: 20px;
+        color: #333;
+      }
+      #upload-form {
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+      }
+      h1 {
+        font-size: 18px;
+        color: #004F41; /* Using the same theme color */
+        margin-top: 0;
+      }
+      .form-group {
+        display: flex;
+        flex-direction: column;
+      }
+      label {
+        margin-bottom: 5px;
+        font-weight: bold;
+      }
+      #file-input {
+        border: 1px solid #ccc;
+        padding: 8px;
+        border-radius: 4px;
+      }
+      button {
+        background-color: #004F41;
+        color: white;
+        border: none;
+        padding: 12px 15px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: bold;
+        transition: background-color 0.2s;
+      }
+      button:hover {
+        background-color: #003a30;
+      }
+      #status {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #555;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Cargar Archivos XML del SAT</h1>
+    <form id="upload-form">
+      <div class="form-group">
+        <label for="file-input">Selecciona los archivos:</label>
+        <input type="file" id="file-input" name="files" multiple accept=".xml,text/xml">
+      </div>
+      <button type="submit">Procesar</button>
+    </form>
+    <div id="status"></div>
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your App Title</title>
-    <?!= includes("css.html"); ?>
-</head>
+    <script>
+      document.getElementById('upload-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const files = document.getElementById('file-input').files;
+        if (files.length === 0) {
+          document.getElementById('status').innerText = 'Por favor, selecciona al menos un archivo.';
+          return;
+        }
 
-<body>
-    <div id="root"></div>
-    <?!= includes("js.html"); ?>
-</body>
+        const submitButton = this.querySelector('button');
+        submitButton.disabled = true;
+        document.getElementById('status').innerText = 'Leyendo archivos...';
 
+        const filePromises = Array.from(files).map(file => {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (event) => resolve(event.target.result);
+            reader.onerror = (error) => reject(error);
+            reader.readAsText(file);
+          });
+        });
+
+        Promise.all(filePromises)
+          .then(fileContents => {
+            document.getElementById('status').innerText = 'Enviando archivos al servidor...';
+            google.script.run
+              .withSuccessHandler(response => {
+                document.getElementById('status').innerText = response.message;
+                // Close the dialog on success
+                setTimeout(() => google.script.host.close(), 2000);
+              })
+              .withFailureHandler(error => {
+                document.getElementById('status').innerText = 'Error: ' + error.message;
+                submitButton.disabled = false;
+              })
+              .processUploadedFiles({files: fileContents});
+          })
+          .catch(error => {
+            document.getElementById('status').innerText = 'Error al leer los archivos: ' + error.message;
+            submitButton.disabled = false;
+          });
+      });
+    </script>
+  </body>
 </html>
