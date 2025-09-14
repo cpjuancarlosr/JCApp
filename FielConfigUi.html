@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: 'Rubik', sans-serif; background-color: #f8f9fa; padding: 20px; }
+      h3 { color: #111111; }
+      label { display: block; margin-top: 10px; font-weight: bold; color: #333; }
+      input[type="text"], input[type="password"] {
+        width: 95%;
+        padding: 8px;
+        margin-top: 5px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+      button {
+        background-color: #A6C2DB; /* Azul */
+        color: white;
+        padding: 10px 15px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-top: 20px;
+      }
+      button:hover { background-color: #8faac0; }
+      #status { margin-top: 15px; font-weight: bold; }
+      .note { font-size: 0.8em; color: #666; margin-top: 15px; }
+    </style>
+  </head>
+  <body>
+    <h3>Configurar FIEL</h3>
+    <p>Ingrese las rutas (ID de archivo de Drive) para sus archivos y su contraseña de clave privada.</p>
+
+    <label for="cert-path">Ruta de Archivo .CER</label>
+    <input type="text" id="cert-path" placeholder="Ej: 1aBcDeFgHiJkLmNoPqRsTuVwXyZ">
+
+    <label for="key-path">Ruta de Archivo .KEY</label>
+    <input type="text" id="key-path" placeholder="Ej: 1aBcDeFgHiJkLmNoPqRsTuVwXyZ">
+
+    <label for="password">Contraseña de Clave Privada</label>
+    <input type="password" id="password">
+
+    <button onclick="saveConfig()">Guardar Configuración</button>
+    <div id="status"></div>
+
+    <div class="note">
+      <strong>Nota de Seguridad:</strong> Su contraseña no se guarda en la hoja de cálculo. Se almacena de forma segura solo para su sesión actual y se elimina al cerrar el documento.
+      <br><br>
+      <strong>Aviso:</strong> La descarga directa desde el SAT es una función experimental. El método recomendado es usar la opción "Procesar CFDI desde Carpeta".
+    </div>
+
+    <script>
+      function saveConfig() {
+        const certPath = document.getElementById('cert-path').value;
+        const keyPath = document.getElementById('key-path').value;
+        const password = document.getElementById('password').value;
+        const statusDiv = document.getElementById('status');
+
+        if (!certPath || !keyPath || !password) {
+          statusDiv.style.color = 'red';
+          statusDiv.innerText = 'Todos los campos son obligatorios.';
+          return;
+        }
+
+        statusDiv.style.color = 'blue';
+        statusDiv.innerText = 'Guardando...';
+
+        const config = { certPath, keyPath, password };
+
+        google.script.run
+          .withSuccessHandler(response => {
+            if (response.status === 'success') {
+              statusDiv.style.color = 'green';
+              statusDiv.innerText = response.message;
+              setTimeout(() => google.script.host.close(), 2000);
+            } else {
+              statusDiv.style.color = 'red';
+              statusDiv.innerText = response.message;
+            }
+          })
+          .withFailureHandler(error => {
+            statusDiv.style.color = 'red';
+            statusDiv.innerText = 'Error inesperado: ' + error.message;
+          })
+          .saveFielConfig(config);
+      }
+    </script>
+  </body>
+</html>
