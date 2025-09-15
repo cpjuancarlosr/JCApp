@@ -35,17 +35,12 @@ function parseCfdiXml(xmlContent) {
   const timbre = comprobante.getChild('Complemento', cfdi).getChild('TimbreFiscalDigital', tfd);
   const impuestosNode = comprobante.getChild('Impuestos', cfdi);
 
-  let ivaTraslado = 0;
-  let ivaRetenido = 0;
-  let isrRetenido = 0;
-
+  let ivaTraslado = 0, ivaRetenido = 0, isrRetenido = 0;
   if (impuestosNode) {
     const traslados = impuestosNode.getChild('Traslados', cfdi);
     if (traslados) {
       traslados.getChildren('Traslado', cfdi).forEach(t => {
-        if (getSafeAttribute(t, 'Impuesto') === '002') {
-          ivaTraslado += parseFloat(getSafeAttribute(t, 'Importe')) || 0;
-        }
+        if (getSafeAttribute(t, 'Impuesto') === '002') ivaTraslado += parseFloat(getSafeAttribute(t, 'Importe')) || 0;
       });
     }
     const retenciones = impuestosNode.getChild('Retenciones', cfdi);
@@ -65,13 +60,13 @@ function parseCfdiXml(xmlContent) {
   const mes = fecha ? ('0' + (date.getMonth() + 1)).slice(-2) : '';
   const period = anio && mes ? anio + '-' + mes : '';
 
+  const tipoDeComprobante = getSafeAttribute(comprobante, 'TipoDeComprobante');
+
   const generalData = {
-    PERIOD: period,
-    ANIO: anio,
-    MES: mes,
+    PERIOD: period, ANIO: anio, MES: mes,
     SERIE: getSafeAttribute(comprobante, 'Serie'),
     FOLIO: getSafeAttribute(comprobante, 'Folio'),
-    TIPODECOMPROBANTE: getSafeAttribute(comprobante, 'TipoDeComprobante'),
+    TIPODECOMPROBANTE: tipoDeComprobante,
     FECHA: fecha,
     EMISORREGIMENFISCAL: getSafeAttribute(emisor, 'RegimenFiscal'),
     EMISORRFC: getSafeAttribute(emisor, 'Rfc'),
@@ -79,8 +74,7 @@ function parseCfdiXml(xmlContent) {
     RECEPTORRFC: getSafeAttribute(receptor, 'Rfc'),
     RECEPTORNOMBRE: getSafeAttribute(receptor, 'Nombre'),
     RECEPTORUSOCFDI: getSafeAttribute(receptor, 'UsoCFDI'),
-    ESTATUS: 'Vigente',
-    MONEDA: getSafeAttribute(comprobante, 'Moneda'),
+    ESTATUS: 'Vigente', MONEDA: getSafeAttribute(comprobante, 'Moneda'),
     METODOPAGO: getSafeAttribute(comprobante, 'MetodoPago'),
     FORMAPAGO: getSafeAttribute(comprobante, 'FormaPago'),
     SUBTOTAL: getSafeAttribute(comprobante, 'SubTotal'),
@@ -89,8 +83,7 @@ function parseCfdiXml(xmlContent) {
     IVARETENIDO: ivaRetenido.toFixed(2),
     ISRRETENIDO: isrRetenido.toFixed(2),
     TOTAL: getSafeAttribute(comprobante, 'Total'),
-    URLXML: '',
-    URLPDF: '',
+    URLXML: '', URLPDF: '',
     UUID: getSafeAttribute(timbre, 'UUID'),
     FECHACANCELACION: '',
   };
@@ -99,44 +92,27 @@ function parseCfdiXml(xmlContent) {
   conceptos.forEach((concepto, index) => {
     const isFirstLine = index === 0;
     const row = [
-      // Descriptive data (repeated for context)
-      generalData.PERIOD,
-      generalData.ANIO,
-      generalData.MES,
-      generalData.SERIE,
-      generalData.FOLIO,
-      generalData.TIPODECOMPROBANTE,
-      generalData.FECHA,
-      generalData.EMISORREGIMENFISCAL,
-      generalData.EMISORRFC,
-      generalData.EMISORNOMBRE,
-      generalData.RECEPTORRFC,
-      generalData.RECEPTORNOMBRE,
-      // Line-item specific data
+      generalData.PERIOD, generalData.ANIO, generalData.MES, generalData.SERIE, generalData.FOLIO,
+      generalData.TIPODECOMPROBANTE, generalData.FECHA, generalData.EMISORREGIMENFISCAL,
+      generalData.EMISORRFC, generalData.EMISORNOMBRE, generalData.RECEPTORRFC, generalData.RECEPTORNOMBRE,
       getSafeAttribute(concepto, 'ClaveProdServ'),
-      // More descriptive data
-      generalData.RECEPTORUSOCFDI,
-      generalData.ESTATUS,
-      generalData.MONEDA,
-      generalData.METODOPAGO,
-      generalData.FORMAPAGO,
-      // Financial data (only on first line)
-      isFirstLine ? generalData.SUBTOTAL : '',
-      isFirstLine ? generalData.DESCUENTO : '',
-      isFirstLine ? generalData.IVATRASLADO : '',
-      isFirstLine ? generalData.IVARETENIDO : '',
-      isFirstLine ? generalData.ISRRETENIDO : '',
-      isFirstLine ? generalData.TOTAL : '',
-      // Descriptive data (repeated for context)
-      generalData.URLXML,
-      generalData.URLPDF,
-      generalData.UUID,
-      generalData.FECHACANCELACION,
+      generalData.RECEPTORUSOCFDI, generalData.ESTATUS, generalData.MONEDA,
+      generalData.METODOPAGO, generalData.FORMAPAGO,
+      isFirstLine ? generalData.SUBTOTAL : '', isFirstLine ? generalData.DESCUENTO : '',
+      isFirstLine ? generalData.IVATRASLADO : '', isFirstLine ? generalData.IVARETENIDO : '',
+      isFirstLine ? generalData.ISRRETENIDO : '', isFirstLine ? generalData.TOTAL : '',
+      generalData.URLXML, generalData.URLPDF, generalData.UUID, generalData.FECHACANCELACION,
     ];
     rows.push(row);
   });
 
-  return rows;
+  // Collect contact information
+  const contacts = [
+    { rfc: generalData.EMISORRFC, nombre: generalData.EMISORNOMBRE, role: 'Emisor', tipoDeComprobante: tipoDeComprobante },
+    { rfc: generalData.RECEPTORRFC, nombre: generalData.RECEPTORNOMBRE, role: 'Receptor', tipoDeComprobante: tipoDeComprobante }
+  ];
+
+  return { rows: rows, contacts: contacts };
 }
 
 /**
