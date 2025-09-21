@@ -3,20 +3,21 @@
   <head>
     <base target="_top">
     <style>
-      body { font-family: Arial, sans-serif; margin: 20px; }
-      label { display: block; margin-top: 10px; font-weight: bold; }
-      input[type="text"] { width: 95%; padding: 6px; margin-top: 4px; border: 1px solid #ccc; border-radius: 4px; }
-      textarea { width: 95%; height: 80px; padding: 6px; margin-top: 4px; border: 1px solid #ccc; border-radius: 4px; }
-      button { background-color: #4285F4; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; margin-top: 15px; }
-      button:disabled { background-color: #aaa; }
-      #status { margin-top: 10px; font-size: 0.9em; color: #555; }
-      .instructions { font-size: 0.9em; color: #666; margin-bottom: 15px; padding: 10px; border: 1px solid #eee; background-color: #f9f9f9; border-radius: 4px; }
+      body { font-family: Arial, sans-serif; margin: 20px; background-color: #f9f9f9; }
+      h2 { color: #333; }
+      label { display: block; margin-top: 12px; font-weight: bold; color: #555; }
+      input[type="text"], input[type="password"] { width: 95%; padding: 8px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; }
+      textarea { width: 95%; height: 70px; padding: 8px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; }
+      button { background-color: #4285F4; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; margin-top: 20px; font-size: 14px; }
+      button:disabled { background-color: #c0c0c0; }
+      #status { margin-top: 15px; font-size: 0.9em; color: #333; padding: 8px; border-radius: 4px; }
+      .instructions { font-size: 0.9em; color: #666; margin-bottom: 20px; padding: 10px; border: 1px solid #eee; background-color: #fff; border-radius: 4px; }
     </style>
   </head>
   <body>
     <h2>Configuración de Credenciales FIEL</h2>
     <div class="instructions">
-      Abra sus archivos .cer y .key en un editor de texto (como Notepad o TextEdit) y copie y pegue el contenido completo, incluyendo las líneas de BEGIN y END.
+      Abra sus archivos <strong>.cer</strong> y <strong>.key</strong> en un editor de texto (como Bloc de Notas o TextEdit) y copie y pegue el contenido completo, incluyendo las líneas de -----BEGIN...----- y -----END...-----.
     </div>
 
     <form id="fiel-form">
@@ -30,7 +31,7 @@
       <textarea id="privateKeyPem" name="privateKeyPem"></textarea>
 
       <label for="issuerName">Nombre del Emisor (Issuer Name)</label>
-      <input type="text" id="issuerName" name="issuerName" placeholder="Ej: C=MX, S=Distrito Federal, L=Coyoacán, O=Servicio de Administración Tributaria...">
+      <input type="text" id="issuerName" name="issuerName" placeholder="Ej: C=MX, S=Distrito Federal, O=Servicio de Administración Tributaria...">
 
       <label for="serialNumber">Número de Serie del Certificado</label>
       <input type="text" id="serialNumber" name="serialNumber" placeholder="Ej: 20001000000300023708">
@@ -60,13 +61,16 @@
           .withSuccessHandler(function(response) {
             document.getElementById('status').innerText = response.message;
             if (response.status === 'success') {
+              document.getElementById('status').style.color = 'green';
               setTimeout(function() { google.script.host.close(); }, 2000);
             } else {
+              document.getElementById('status').style.color = 'red';
               submitButton.disabled = false;
             }
           })
           .withFailureHandler(function(error) {
             document.getElementById('status').innerText = 'Error: ' + error.message;
+            document.getElementById('status').style.color = 'red';
             submitButton.disabled = false;
           })
           .saveFielCredentials(formData);

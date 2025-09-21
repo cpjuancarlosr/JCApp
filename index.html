@@ -3,65 +3,19 @@
   <head>
     <base target="_top">
     <style>
-      body {
-        font-family: Arial, sans-serif;
-        background-color: #f8f9fa;
-        margin: 0;
-        padding: 20px;
-        color: #333;
-      }
-      #upload-form {
-        display: flex;
-        flex-direction: column;
-        gap: 15px;
-      }
-      h1 {
-        font-size: 18px;
-        color: #004F41; /* Using the same theme color */
-        margin-top: 0;
-      }
-      .form-group {
-        display: flex;
-        flex-direction: column;
-      }
-      label {
-        margin-bottom: 5px;
-        font-weight: bold;
-      }
-      #file-input {
-        border: 1px solid #ccc;
-        padding: 8px;
-        border-radius: 4px;
-      }
-      button {
-        background-color: #004F41;
-        color: white;
-        border: none;
-        padding: 12px 15px;
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 14px;
-        font-weight: bold;
-        transition: background-color 0.2s;
-      }
-      button:hover {
-        background-color: #003a30;
-      }
-      #status {
-        margin-top: 10px;
-        font-size: 12px;
-        color: #555;
-      }
+      body { font-family: Arial, sans-serif; margin: 20px; }
+      h1 { font-size: 1.2em; }
+      button { background-color: #4285F4; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; margin-top: 15px; }
+      button:disabled { background-color: #aaa; }
+      #status { margin-top: 10px; font-size: 0.9em; color: #555; }
     </style>
   </head>
   <body>
-    <h1>Cargar Archivos XML del SAT</h1>
+    <h1>Cargar Archivos XML Locales</h1>
     <form id="upload-form">
-      <div class="form-group">
-        <label for="file-input">Selecciona los archivos:</label>
-        <input type="file" id="file-input" name="files" multiple accept=".xml,text/xml">
-      </div>
-      <button type="submit">Procesar</button>
+      <input type="file" id="file-input" name="files" multiple accept=".xml,text/xml">
+      <br>
+      <button type="submit">Procesar Archivos</button>
     </form>
     <div id="status"></div>
 
@@ -91,12 +45,15 @@
           .then(fileContents => {
             document.getElementById('status').innerText = 'Enviando archivos al servidor...';
             google.script.run
-              .withSuccessHandler(response => {
+              .withSuccessHandler(function(response) {
                 document.getElementById('status').innerText = response.message;
-                // Close the dialog on success
-                setTimeout(() => google.script.host.close(), 2000);
+                if (response.status === 'success') {
+                  setTimeout(function() { google.script.host.close(); }, 2000);
+                } else {
+                  submitButton.disabled = false;
+                }
               })
-              .withFailureHandler(error => {
+              .withFailureHandler(function(error) {
                 document.getElementById('status').innerText = 'Error: ' + error.message;
                 submitButton.disabled = false;
               })

@@ -18,7 +18,6 @@ function onOpen(e) {
 
   const manualMenu = ui.createMenu('Carga Manual')
     .addItem('Cargar XMLs (locales)...', 'showLocalXmlUploadDialog');
-    // PDF Placeholder can be added back later if needed
 
   satMenu.addToUi();
   manualMenu.addToUi();
@@ -43,7 +42,6 @@ function showLocalXmlUploadDialog() {
     .setHeight(250);
   SpreadsheetApp.getUi().showModalDialog(html, 'Cargar Archivos XML Locales');
 }
-
 
 /**
  * Saves the FIEL credentials to script properties.
@@ -79,11 +77,7 @@ const SAT_NS = {
 };
 
 const SAT_ENDPOINTS = {
-  PRODUCTION: { /* ... endpoints ... */ },
-  TEST: { /* ... endpoints ... */ },
-};
-// The full SAT_ENDPOINTS object from user's code would be here. For brevity, it's omitted.
-SAT_ENDPOINTS.PRODUCTION = {
+  PRODUCTION: {
     autenticacion: 'https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/Autenticacion/Autenticacion.svc',
     solicita: 'https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc',
     verifica: 'https://cfdidescargamasivasolicitud.clouda.sat.gob.mx/VerificaSolicitudDescargaService.svc',
@@ -95,21 +89,40 @@ SAT_ENDPOINTS.PRODUCTION = {
       verifica: 'http://DescargaMasivaTerceros.sat.gob.mx/IVerificaSolicitudDescargaService/VerificaSolicitudDescarga',
       descarga: 'http://DescargaMasivaTerceros.sat.gob.mx/IDescargaMasivaTercerosService/Descargar',
     },
-  };
-SAT_ENDPOINTS.TEST = {
+  },
+  TEST: {
     autenticacion: 'https://pruebassolicituddescargamasivasolicitud.clouda.sat.gob.mx/Autenticacion/Autenticacion.svc',
     solicita: 'https://pruebassolicituddescargamasivasolicitud.clouda.sat.gob.mx/SolicitaDescargaService.svc',
     verifica: 'https://pruebassolicituddescargamasivasolicitud.clouda.sat.gob.mx/VerificaSolicitudDescargaService.svc',
     descarga: 'https://pruebassolicituddescargamasiva.clouda.sat.gob.mx/DescargaMasivaService.svc',
-    soapAction: SAT_ENDPOINTS.PRODUCTION.soapAction
+    soapAction: {
+      autentica: 'http://DescargaMasivaTerceros.gob.mx/IAutenticacion/Autentica',
+      solicitaEmitidos: 'http://DescargaMasivaTerceros.sat.gob.mx/ISolicitaDescargaService/SolicitaDescargaEmitidos',
+      solicitaRecibidos: 'http://DescargaMasivaTerceros.sat.gob.mx/ISolicitaDescargaService/SolicitaDescargaRecibidos',
+      verifica: 'http://DescargaMasivaTerceros.sat.gob.mx/IVerificaSolicitudDescargaService/VerificaSolicitudDescarga',
+      descarga: 'http://DescargaMasivaTerceros.sat.gob.mx/IDescargaMasivaTercerosService/Descargar',
+    },
+  },
 };
 
-
-const DEFAULT_OPTIONS = { /* ... options ... */ };
+const DEFAULT_OPTIONS = {
+  startDate: '',
+  endDate: '',
+  tipoConsulta: 'emitidos',
+  estadoComprobante: 'Vigente',
+  tipoSolicitud: 'CFDI',
+  tipoComprobante: '',
+  rfcEmisor: '',
+  rfcReceptor: '',
+  rfcReceptores: [],
+  rfcACuentaTerceros: '',
+  complemento: '',
+  skipDriveUpload: false,
+};
 
 function getScriptConfig() {
   const props = PropertiesService.getScriptProperties();
-  return {
+  const cfg = {
     certificatePem: props.getProperty('FIEL_CERT_PEM') || '',
     privateKeyPem: props.getProperty('FIEL_PRIVATE_KEY_PEM') || '',
     certificateIssuer: props.getProperty('FIEL_ISSUER_NAME') || '',
@@ -120,12 +133,22 @@ function getScriptConfig() {
     environment: (props.getProperty('SAT_ENVIRONMENT') || 'PRODUCTION').toUpperCase(),
     pollIntervalSeconds: parseInt(props.getProperty('SAT_POLL_INTERVAL_SECONDS') || '60', 10),
     maxWaitMinutes: parseInt(props.getProperty('SAT_MAX_WAIT_MINUTES') || '30', 10),
+    defaultOptions: props.getProperty('SAT_DEFAULT_OPTIONS'),
   };
+  if (cfg.defaultOptions) {
+    try {
+      const parsed = JSON.parse(cfg.defaultOptions);
+      cfg.defaultOptions = Object.assign({}, DEFAULT_OPTIONS, parsed);
+    } catch (err) {
+      throw new Error('SAT_DEFAULT_OPTIONS tiene JSON inválido: ' + err.message);
+    }
+  } else {
+    cfg.defaultOptions = DEFAULT_OPTIONS;
+  }
+  return cfg;
 }
 
-function assertConfig(config) { /* ... assertion logic ... */ }
-// For brevity, the full function is omitted. It checks for missing properties.
-assertConfig = function(config) {
+function assertConfig(config) {
   const missing = [];
   if (!config.certificatePem) missing.push('FIEL_CERT_PEM');
   if (!config.privateKeyPem) missing.push('FIEL_PRIVATE_KEY_PEM');
@@ -140,7 +163,6 @@ assertConfig = function(config) {
     throw new Error('SAT_ENVIRONMENT debe ser PRODUCTION o TEST');
   }
 }
-
 
 // =================================================================
 // UNIFIED PARSING & SHEET WRITING LOGIC
@@ -304,20 +326,16 @@ function processLocalFiles(formObject) {
 
 
 // =================================================================
-// SAT DOWNLOAD WORKFLOW (Refactored)
+// SAT DOWNLOAD WORKFLOW
 // =================================================================
 
-function runDescargaMasivaCfdi() { /* ... unchanged ... */ }
-function descargarCfdiMasivo(userOptions) { /* ... main logic ... */ }
-// For brevity, the full functions are omitted.
-// The key change is inside `parsearPaquete` and the end of `descargarCfdiMasivo`.
-runDescargaMasivaCfdi = function() {
+function runDescargaMasivaCfdi() {
   const config = getScriptConfig();
   assertConfig(config);
   descargarCfdiMasivo(config.defaultOptions);
 }
 
-descargarCfdiMasivo = function(userOptions) {
+function descargarCfdiMasivo(userOptions) {
   const config = getScriptConfig();
   assertConfig(config);
   const options = mergeOptions(config.defaultOptions, userOptions || {});
@@ -354,42 +372,16 @@ descargarCfdiMasivo = function(userOptions) {
   if (incomeRows.length > 0) writeDataToSheet('XML_I', incomeRows);
   if (expenseRows.length > 0) writeDataToSheet('XML_E', expenseRows);
 
+  SpreadsheetApp.getUi().alert('Descarga completada', `Se procesaron ${status.IdsPaquetes.length} paquetes.`, SpreadsheetApp.getUi().ButtonSet.OK);
+
   return {
     requestId: requestId,
     paquetes: status.IdsPaquetes,
-    hojasActualizadas: ['XML_I', 'XML_E'],
   };
 }
 
 
-function mergeOptions(base, override) { /* ... unchanged ... */ }
-function validarOpciones(options) { /* ... unchanged ... */ }
-function obtenerToken(config) { /* ... unchanged ... */ }
-function solicitarDescarga(config, options, token) { /* ... unchanged ... */ }
-function esperarPaquetes(config, requestId, token) { /* ... unchanged ... */ }
-function verificarSolicitud(config, requestId, token) { /* ... unchanged ... */ }
-function descargarPaquete(config, packageId, token) { /* ... unchanged ... */ }
-function llamarSat(config, request) { /* ... unchanged ... */ }
-function construirSolicitudAutenticacion(config) { /* ... unchanged ... */ }
-function construirSignedInfoAutenticacion(digestValue) { /* ... unchanged ... */ }
-function construirSolicitudDescarga(config, options) { /* ... unchanged ... */ }
-function construirAtributosSolicitud(config, options) { /* ... unchanged ... */ }
-function construirElementosHijoSolicitud(options) { /* ... unchanged ... */ }
-function construirSignedInfoPeticion(digestValue) { /* ... unchanged ... */ }
-function construirKeyInfo(config) { /* ... unchanged ... */ }
-function construirVerificacion(config, requestId) { /* ... unchanged ... */ }
-function construirDescarga(config, packageId) { /* ... unchanged ... */ }
-function formatoFechaIso(fecha) { /* ... unchanged ... */ }
-function sha1DigestBase64(contenido) { /* ... unchanged ... */ }
-function firmarSha1(contenido, privateKeyPem) { /* ... unchanged ... */ }
-function limpiarCertificado(pem) { /* ... unchanged ... */ }
-function escaparXml(valor) { /* ... unchanged ... */ }
-function buscarDescendiente(elemento, nombreLocal) { /* ... unchanged ... */ }
-function normalizarSerial(serial) { /* ... unchanged ... */ }
-// For brevity, the full unchanged functions are omitted.
-// I will only include the full code for the functions I am creating or refactoring.
-// The SAT communication logic remains the same.
-mergeOptions = function(base, override) {
+function mergeOptions(base, override) {
   const resultado = Object.assign({}, base);
   Object.keys(override).forEach(function (key) {
     if (override[key] !== undefined && override[key] !== null && override[key] !== '') {
@@ -400,38 +392,391 @@ mergeOptions = function(base, override) {
     resultado.rfcReceptores = override.rfcReceptores.slice();
   }
   return resultado;
-};
-validarOpciones = function(options) {
+}
+
+function validarOpciones(options) {
   if (!options.startDate || !options.endDate) {
     throw new Error('Debes proporcionar startDate y endDate en formato YYYY-MM-DD');
   }
   if (!['emitidos', 'recibidos'].includes(options.tipoConsulta.toLowerCase())) {
     throw new Error('tipoConsulta debe ser "emitidos" o "recibidos"');
   }
-};
-obtenerToken = function(config) {
+}
+
+function obtenerToken(config) {
   const cacheKey = 'sat_token_' + config.environment;
   const cache = CacheService.getScriptCache();
   const cached = cache.get(cacheKey);
   if (cached) {
     const data = JSON.parse(cached);
-    if (Date.now() < data.expiresAt - 30000) return data.token;
+    if (Date.now() < data.expiresAt - 30000) {
+      return data.token;
+    }
   }
   const envelope = construirSolicitudAutenticacion(config);
-  const response = llamarSat(config, { url: SAT_ENDPOINTS[config.environment].autenticacion, soapAction: SAT_ENDPOINTS[config.environment].soapAction.autentica, payload: envelope, authorization: null });
+  const response = llamarSat(config, {
+    url: SAT_ENDPOINTS[config.environment].autenticacion,
+    soapAction: SAT_ENDPOINTS[config.environment].soapAction.autentica,
+    payload: envelope,
+    authorization: null,
+  });
   const parsed = XmlService.parse(response);
-  const token = buscarDescendiente(parsed.getRootElement(), 'AutenticaResult').getText();
-  const expiresAt = Date.parse(buscarDescendiente(parsed.getRootElement(), 'Expires').getText());
+  const namespace = XmlService.getNamespace('s', SAT_NS.SOAP);
+  const body = parsed.getRootElement().getChild('Body', namespace);
+  const header = parsed.getRootElement().getChild('Header', namespace);
+  if (!body) {
+    throw new Error('Respuesta de Autenticación inválida');
+  }
+  const authResult = buscarDescendiente(body, 'AutenticaResult');
+  if (!authResult) {
+    throw new Error('No se encontró AutenticaResult en la respuesta de autenticación');
+  }
+  const token = authResult.getText();
+  const timestampNode = header ? buscarDescendiente(header, 'Timestamp') : null;
+  var expiresAt = Date.now() + 5 * 60 * 1000;
+  if (timestampNode) {
+    const expiresNode = buscarDescendiente(timestampNode, 'Expires');
+    if (expiresNode) {
+      expiresAt = Date.parse(expiresNode.getText()) || expiresAt;
+    }
+  }
   cache.put(cacheKey, JSON.stringify({ token: token, expiresAt: expiresAt }), 280);
   return token;
-};
-solicitarDescarga = function(config, options, token) {
-    const payload = construirSolicitudDescarga(config, options);
-    const response = llamarSat(config, { url: SAT_ENDPOINTS[config.environment].solicita, soapAction: options.tipoConsulta.toLowerCase() === 'emitidos' ? SAT_ENDPOINTS[config.environment].soapAction.solicitaEmitidos : SAT_ENDPOINTS[config.environment].soapAction.solicitaRecibidos, payload: payload, authorization: token });
-    const resultado = buscarDescendiente(parsed.getRootElement(), 'SolicitaDescargaResult');
-    const atributos = extraerAtributos(resultado);
-    if (atributos.CodEstatus !== '5000') throw new Error('SAT rechazó la solicitud: ' + atributos.Mensaje);
-    return atributos;
-};
-// And so on for all the other SAT-related functions...
-// The key is that the parsing and writing logic is now centralized.
+}
+
+function solicitarDescarga(config, options, token) {
+  const payload = construirSolicitudDescarga(config, options);
+  const response = llamarSat(config, {
+    url: SAT_ENDPOINTS[config.environment].solicita,
+    soapAction: options.tipoConsulta.toLowerCase() === 'emitidos'
+      ? SAT_ENDPOINTS[config.environment].soapAction.solicitaEmitidos
+      : SAT_ENDPOINTS[config.environment].soapAction.solicitaRecibidos,
+    payload: payload,
+    authorization: token,
+  });
+  const parsed = XmlService.parse(response);
+  const resultado = buscarDescendiente(parsed.getRootElement(), 'SolicitaDescargaResult');
+  if (!resultado) {
+      throw new Error('No se pudo interpretar la respuesta de solicitud de descarga. Respuesta: ' + response);
+  }
+  const atributos = extraerAtributos(resultado);
+  if (atributos.CodEstatus && atributos.CodEstatus !== '5000') {
+    throw new Error('SAT rechazó la solicitud: ' + atributos.CodEstatus + ' ' + (atributos.Mensaje || ''));
+  }
+  if (!atributos.IdSolicitud) {
+    throw new Error('La respuesta de solicitud no incluye IdSolicitud');
+  }
+  return atributos;
+}
+
+function esperarPaquetes(config, requestId, token) {
+  const deadline = Date.now() + config.maxWaitMinutes * 60 * 1000;
+  while (true) {
+    const status = verificarSolicitud(config, requestId, token);
+    const estadoSolicitud = parseInt(status.EstadoSolicitud, 10);
+    if (estadoSolicitud === 3) { // Terminado
+      if (!status.IdsPaquetes || status.IdsPaquetes.length === 0) {
+        throw new Error('La solicitud se marcó terminada pero sin paquetes disponibles');
+      }
+      return status;
+    }
+    if (estadoSolicitud === 2) { // En Proceso
+       // Continue
+    } else if ([4, 5, 6].indexOf(estadoSolicitud) !== -1) { // Error, Rechazado, etc.
+      throw new Error('La solicitud ' + requestId + ' falló con estado ' + estadoSolicitud + ': ' + (status.Mensaje || ''));
+    }
+    if (Date.now() > deadline) {
+      throw new Error('La solicitud ' + requestId + ' no concluyó en el tiempo máximo configurado');
+    }
+    Utilities.sleep(Math.max(1, config.pollIntervalSeconds) * 1000);
+  }
+}
+
+function verificarSolicitud(config, requestId, token) {
+  const payload = construirVerificacion(config, requestId);
+  const response = llamarSat(config, {
+    url: SAT_ENDPOINTS[config.environment].verifica,
+    soapAction: SAT_ENDPOINTS[config.environment].soapAction.verifica,
+    payload: payload,
+    authorization: token,
+  });
+  const parsed = XmlService.parse(response);
+  const resultado = buscarDescendiente(parsed.getRootElement(), 'VerificaSolicitudDescargaResult');
+  if (!resultado) {
+    throw new Error('Respuesta de verificación inválida');
+  }
+  const atributos = extraerAtributos(resultado);
+  const ids = resultado.getChildren('IdsPaquetes', resultado.getNamespace()).map(function (node) {
+    return node.getText();
+  });
+  atributos.IdsPaquetes = ids;
+  return atributos;
+}
+
+function descargarPaquete(config, packageId, token) {
+  const payload = construirDescarga(config, packageId);
+  const response = llamarSat(config, {
+    url: SAT_ENDPOINTS[config.environment].descarga,
+    soapAction: SAT_ENDPOINTS[config.environment].soapAction.descarga,
+    payload: payload,
+    authorization: token,
+  });
+  const parsed = XmlService.parse(response);
+  const paqueteNode = buscarDescendiente(parsed.getRootElement(), 'Paquete');
+  if (!paqueteNode) {
+    throw new Error('Respuesta de descarga sin elemento Paquete');
+  }
+  const zipBytes = Utilities.base64Decode(paqueteNode.getText());
+  return { zipBytes: zipBytes };
+}
+
+function llamarSat(config, request) {
+  const headers = {
+    'Content-Type': 'text/xml; charset=utf-8',
+    'Accept': 'text/xml',
+    'Cache-Control': 'no-cache',
+    'SOAPAction': request.soapAction,
+  };
+  if (request.authorization) {
+    headers.Authorization = 'WRAP access_token="' + request.authorization + '"';
+  }
+  const respuesta = UrlFetchApp.fetch(request.url, {
+    method: 'post',
+    headers: headers,
+    muteHttpExceptions: true,
+    payload: request.payload,
+  });
+  const codigo = respuesta.getResponseCode();
+  if (codigo < 200 || codigo >= 300) {
+    throw new Error('Error HTTP ' + codigo + ' al invocar ' + request.url + ': ' + respuesta.getContentText());
+  }
+  return respuesta.getContentText();
+}
+
+function construirSolicitudAutenticacion(config) {
+  const created = formatoFechaIso(new Date());
+  const expires = formatoFechaIso(new Date(Date.now() + 5 * 60 * 1000));
+  const certBase64 = limpiarCertificado(config.certificatePem);
+  const timestampC14n = [
+    '<u:Timestamp xmlns:u="', SAT_NS.WSU, '" u:Id="_0">',
+    '<u:Created>', created, '</u:Created>',
+    '<u:Expires>', expires, '</u:Expires>',
+    '</u:Timestamp>'
+  ].join('');
+  const digestValue = sha1DigestBase64(timestampC14n);
+  const signedInfo = construirSignedInfoAutenticacion(digestValue);
+  const signatureValue = firmarSha1(signedInfo, config.privateKeyPem);
+  const signatureXml = [
+    '<Signature xmlns="', SAT_NS.DS, '">',
+    signedInfo,
+    '<SignatureValue>', signatureValue, '</SignatureValue>',
+    '<KeyInfo><o:SecurityTokenReference xmlns:o="', SAT_NS.WSSE, '">',
+    '<o:Reference ValueType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3" URI="#BinarySecurityToken"/>',
+    '</o:SecurityTokenReference></KeyInfo>',
+    '</Signature>'
+  ].join('');
+  return [
+    '<s:Envelope xmlns:s="', SAT_NS.SOAP, '" xmlns:o="', SAT_NS.WSSE, '" xmlns:u="', SAT_NS.WSU, '">',
+    '<s:Header>',
+    '<o:Security s:mustUnderstand="1">',
+    timestampC14n,
+    '<o:BinarySecurityToken u:Id="BinarySecurityToken" ValueType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3" EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">',
+    certBase64,
+    '</o:BinarySecurityToken>',
+    signatureXml,
+    '</o:Security>',
+    '</s:Header>',
+    '<s:Body><Autentica xmlns="http://DescargaMasivaTerceros.gob.mx"/></s:Body>',
+    '</s:Envelope>'
+  ].join('');
+}
+
+function construirSignedInfoAutenticacion(digestValue) {
+  return [
+    '<SignedInfo xmlns="', SAT_NS.DS, '">',
+    '<CanonicalizationMethod Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/>',
+    '<SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/>',
+    '<Reference URI="#_0">',
+    '<Transforms><Transform Algorithm="http://www.w3.org/2001/10/xml-exc-c14n#"/></Transforms>',
+    '<DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/>',
+    '<DigestValue>', digestValue, '</DigestValue>',
+    '</Reference>',
+    '</SignedInfo>'
+  ].join('');
+}
+
+function construirSolicitudDescarga(config, options) {
+  const nsDes = ' xmlns:des="' + SAT_NS.DES + '"';
+  const atributos = construirAtributosSolicitud(config, options);
+  const hijos = construirElementosHijoSolicitud(options);
+  const solicitudXml = hijos
+    ? ['<des:solicitud', atributos, '>', hijos, '</des:solicitud>'].join('')
+    : ['<des:solicitud', atributos, '/>'].join('');
+  const operacion = options.tipoConsulta.toLowerCase() === 'emitidos'
+    ? 'SolicitaDescargaEmitidos'
+    : 'SolicitaDescargaRecibidos';
+  const contenidoSinFirma = ['<des:', operacion, nsDes, '>', solicitudXml, '</des:', operacion, '>'].join('');
+  const digestValue = sha1DigestBase64(contenidoSinFirma);
+  const signedInfo = construirSignedInfoPeticion(digestValue);
+  const signatureValue = firmarSha1(signedInfo, config.privateKeyPem);
+  const keyInfo = construirKeyInfo(config);
+  const signatureXml = ['<Signature xmlns="', SAT_NS.DS, '">', signedInfo, '<SignatureValue>', signatureValue, '</SignatureValue>', keyInfo, '</Signature>'].join('');
+  const contenidoConFirma = ['<des:', operacion, nsDes, '>', solicitudXml, signatureXml, '</des:', operacion, '>'].join('');
+  return ['<s:Envelope xmlns:s="', SAT_NS.SOAP, '"><s:Header/>', '<s:Body>', contenidoConFirma, '</s:Body></s:Envelope>'].join('');
+}
+
+function construirAtributosSolicitud(config, options) {
+  const attrs = {
+    FechaInicial: options.startDate,
+    FechaFinal: options.endDate,
+    RfcSolicitante: config.rfc,
+    TipoSolicitud: options.tipoSolicitud,
+    EstadoComprobante: options.estadoComprobante || null,
+    TipoComprobante: options.tipoComprobante || null,
+    RfcACuentaTerceros: options.rfcACuentaTerceros || null,
+    Complemento: options.complemento || null,
+  };
+  const tipoConsulta = (options.tipoConsulta || '').toLowerCase();
+  if (tipoConsulta === 'emitidos') {
+    attrs.RfcEmisor = options.rfcEmisor || config.rfc;
+    if (options.rfcReceptor) {
+      attrs.RfcReceptor = options.rfcReceptor;
+    }
+  } else {
+    attrs.RfcReceptor = options.rfcReceptor || config.rfc;
+    if (options.rfcEmisor) {
+      attrs.RfcEmisor = options.rfcEmisor;
+    }
+  }
+  const entries = Object.keys(attrs).filter(function (key) {
+    return attrs[key] !== undefined && attrs[key] !== null && attrs[key] !== '';
+  }).map(function (key) {
+    return [key, attrs[key]];
+  });
+  entries.sort(function (a, b) {
+    return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+  });
+  return entries.map(function (entry) {
+    return ' ' + entry[0] + '="' + escaparXml(entry[1]) + '"';
+  }).join('');
+}
+
+function construirElementosHijoSolicitud(options) {
+  const partes = [];
+  const receptores = Array.isArray(options.rfcReceptores) ? options.rfcReceptores.filter(function (r) { return r; }) : [];
+  if (receptores.length) {
+    const nodos = receptores.map(function (rfc) {
+      return '<des:RfcReceptor>' + escaparXml(rfc) + '</des:RfcReceptor>';
+    }).join('');
+    partes.push('<des:RfcReceptores>' + nodos + '</des:RfcReceptores>');
+  }
+  return partes.join('');
+}
+
+function construirSignedInfoPeticion(digestValue) {
+  return [
+    '<SignedInfo xmlns="', SAT_NS.DS, '">',
+    '<CanonicalizationMethod Algorithm="http://www.w3.org/TR/2001/REC-xml-c14n-20010315"/>',
+    '<SignatureMethod Algorithm="http://www.w3.org/2000/09/xmldsig#rsa-sha1"/>',
+    '<Reference URI="">',
+    '<Transforms><Transform Algorithm="http://www.w3.org/2000/09/xmldsig#enveloped-signature"/></Transforms>',
+    '<DigestMethod Algorithm="http://www.w3.org/2000/09/xmldsig#sha1"/>',
+    '<DigestValue>', digestValue, '</DigestValue>',
+    '</Reference>',
+    '</SignedInfo>'
+  ].join('');
+}
+
+function construirKeyInfo(config) {
+  const certificado = limpiarCertificado(config.certificatePem);
+  const issuer = escaparXml(config.certificateIssuer);
+  const serial = normalizarSerial(config.certificateSerial);
+  return [
+    '<KeyInfo><X509Data>',
+    '<X509IssuerSerial>',
+    '<X509IssuerName>', issuer, '</X509IssuerName>',
+    '<X509SerialNumber>', serial, '</X509SerialNumber>',
+    '</X509IssuerSerial>',
+    '<X509Certificate>', certificado, '</X509Certificate>',
+    '</X509Data></KeyInfo>'
+  ].join('');
+}
+
+function construirVerificacion(config, requestId) {
+  const solicitud = ['<des:VerificaSolicitudDescarga xmlns:des="', SAT_NS.DES, '">',
+    '<des:solicitud RfcSolicitante="', escaparXml(config.rfc), '" IdSolicitud="', escaparXml(requestId), '"/>',
+    '</des:VerificaSolicitudDescarga>'].join('');
+  return ['<s:Envelope xmlns:s="', SAT_NS.SOAP, '"><s:Header/>', '<s:Body>', solicitud, '</s:Body></s:Envelope>'].join('');
+}
+
+function construirDescarga(config, packageId) {
+  const solicitud = ['<des:PeticionDescargaMasivaTercerosEntrada xmlns:des="', SAT_NS.DES, '">',
+    '<des:peticionDescarga RfcSolicitante="', escaparXml(config.rfc), '" IdPaquete="', escaparXml(packageId), '"/>',
+    '</des:PeticionDescargaMasivaTercerosEntrada>'].join('');
+  return ['<s:Envelope xmlns:s="', SAT_NS.SOAP, '"><s:Header/>', '<s:Body>', solicitud, '</s:Body></s:Envelope>'].join('');
+}
+
+function formatoFechaIso(fecha) {
+  return Utilities.formatDate(fecha, 'GMT', "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
+}
+
+function sha1DigestBase64(contenido) {
+  const digest = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_1, contenido, Utilities.Charset.UTF_8);
+  return Utilities.base64Encode(digest);
+}
+
+function firmarSha1(contenido, privateKeyPem) {
+  const firma = Utilities.computeRsaSha1Signature(contenido, privateKeyPem);
+  return Utilities.base64Encode(firma);
+}
+
+function limpiarCertificado(pem) {
+  return pem.replace(/-----BEGIN CERTIFICATE-----/, '')
+    .replace(/-----END CERTIFICATE-----/, '')
+    .replace(/\s+/g, '');
+}
+
+function escaparXml(valor) {
+  return String(valor)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function buscarDescendiente(elemento, nombreLocal) {
+  if (elemento.getName && elemento.getName() === nombreLocal) {
+    return elemento;
+  }
+  const hijos = elemento.getChildren();
+  for (var i = 0; i < hijos.length; i++) {
+    const encontrado = buscarDescendiente(hijos[i], nombreLocal);
+    if (encontrado) {
+      return encontrado;
+    }
+  }
+  return null;
+}
+
+function normalizarSerial(serial) {
+  if (!serial) {
+    throw new Error('FIEL_CERT_SERIAL no puede estar vacío');
+  }
+  const limpio = serial.replace(/[^0-9A-Fa-f]/g, '');
+  if (!limpio) {
+    throw new Error('FIEL_CERT_SERIAL inválido');
+  }
+  if (/^[0-9]+$/.test(limpio)) {
+    return limpio;
+  }
+  return BigInt('0x' + limpio).toString(10);
+}
+
+function extraerAtributos(elemento) {
+    const attrs = {};
+    elemento.getAttributes().forEach(function(attr) {
+        attrs[attr.getName()] = attr.getValue();
+    });
+    return attrs;
+}
