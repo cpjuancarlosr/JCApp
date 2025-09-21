@@ -100,7 +100,7 @@
                 document.getElementById('status').innerText = 'Error: ' + error.message;
                 submitButton.disabled = false;
               })
-              .processUploadedFiles({files: fileContents});
+              .processLocalFiles({files: fileContents});
           })
           .catch(error => {
             document.getElementById('status').innerText = 'Error al leer los archivos: ' + error.message;

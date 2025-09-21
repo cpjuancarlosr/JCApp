@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body { font-family: Arial, sans-serif; margin: 20px; }
+      label { display: block; margin-top: 10px; font-weight: bold; }
+      input[type="text"] { width: 95%; padding: 6px; margin-top: 4px; border: 1px solid #ccc; border-radius: 4px; }
+      textarea { width: 95%; height: 80px; padding: 6px; margin-top: 4px; border: 1px solid #ccc; border-radius: 4px; }
+      button { background-color: #4285F4; color: white; padding: 10px 15px; border: none; border-radius: 4px; cursor: pointer; margin-top: 15px; }
+      button:disabled { background-color: #aaa; }
+      #status { margin-top: 10px; font-size: 0.9em; color: #555; }
+      .instructions { font-size: 0.9em; color: #666; margin-bottom: 15px; padding: 10px; border: 1px solid #eee; background-color: #f9f9f9; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h2>Configuración de Credenciales FIEL</h2>
+    <div class="instructions">
+      Abra sus archivos .cer y .key en un editor de texto (como Notepad o TextEdit) y copie y pegue el contenido completo, incluyendo las líneas de BEGIN y END.
+    </div>
+
+    <form id="fiel-form">
+      <label for="rfc">RFC</label>
+      <input type="text" id="rfc" name="rfc">
+
+      <label for="certificatePem">Contenido del Certificado (.cer)</label>
+      <textarea id="certificatePem" name="certificatePem"></textarea>
+
+      <label for="privateKeyPem">Contenido de la Llave Privada (.key)</label>
+      <textarea id="privateKeyPem" name="privateKeyPem"></textarea>
+
+      <label for="issuerName">Nombre del Emisor (Issuer Name)</label>
+      <input type="text" id="issuerName" name="issuerName" placeholder="Ej: C=MX, S=Distrito Federal, L=Coyoacán, O=Servicio de Administración Tributaria...">
+
+      <label for="serialNumber">Número de Serie del Certificado</label>
+      <input type="text" id="serialNumber" name="serialNumber" placeholder="Ej: 20001000000300023708">
+
+      <button type="submit">Guardar Credenciales</button>
+    </form>
+
+    <div id="status"></div>
+
+    <script>
+      document.getElementById('fiel-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+
+        const submitButton = this.querySelector('button');
+        submitButton.disabled = true;
+        document.getElementById('status').innerText = 'Guardando...';
+
+        const formData = {
+          rfc: document.getElementById('rfc').value,
+          certificatePem: document.getElementById('certificatePem').value,
+          privateKeyPem: document.getElementById('privateKeyPem').value,
+          issuerName: document.getElementById('issuerName').value,
+          serialNumber: document.getElementById('serialNumber').value
+        };
+
+        google.script.run
+          .withSuccessHandler(function(response) {
+            document.getElementById('status').innerText = response.message;
+            if (response.status === 'success') {
+              setTimeout(function() { google.script.host.close(); }, 2000);
+            } else {
+              submitButton.disabled = false;
+            }
+          })
+          .withFailureHandler(function(error) {
+            document.getElementById('status').innerText = 'Error: ' + error.message;
+            submitButton.disabled = false;
+          })
+          .saveFielCredentials(formData);
+      });
+    </script>
+  </body>
+</html>
