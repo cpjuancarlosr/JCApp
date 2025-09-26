@@ -1,51 +1,44 @@
 /**
  * @OnlyCurrentDoc
+ * Main script file for the SAT Accounting Tool.
  */
 
 // =================================================================
-// UI & SETUP FUNCTIONS
+// 1. UI & SETUP FUNCTIONS
 // =================================================================
 
-/**
- * Creates the add-on menu when the spreadsheet is opened.
- */
 function onOpen(e) {
   const ui = SpreadsheetApp.getUi();
-  const satMenu = ui.createMenu('SAT Herramientas')
-    .addItem('Descargar CFDI desde SAT...', 'runDescargaMasivaCfdi')
-    .addSeparator()
-    .addItem('Configurar Credenciales...', 'showFielSetupDialog');
+  ui.createMenu('⚙️ Configuración')
+    .addItem('Establecer Credenciales FIEL...', 'showFielSetupDialog')
+    .addItem('Administrar Catálogo de Cuentas...', 'showChartOfAccountsDialog')
+    .addToUi();
 
-  const manualMenu = ui.createMenu('Carga Manual')
-    .addItem('Cargar XMLs (locales)...', 'showLocalXmlUploadDialog');
-
-  satMenu.addToUi();
-  manualMenu.addToUi();
+  ui.createMenu('✅ Tareas')
+    .addItem('Descargar CFDI desde SAT...', 'showSatDownloadDialog')
+    .addItem('Cargar XMLs (locales)...', 'showLocalXmlUploadDialog')
+    .addToUi();
 }
 
-/**
- * Shows a dialog for setting the FIEL credentials.
- */
 function showFielSetupDialog() {
-  const html = HtmlService.createHtmlOutputFromFile('setup')
-    .setWidth(600)
-    .setHeight(500);
+  const html = HtmlService.createHtmlOutputFromFile('setup').setWidth(600).setHeight(500);
   SpreadsheetApp.getUi().showModalDialog(html, 'Configurar Credenciales FIEL');
 }
 
-/**
- * Shows the dialog for uploading local XML files.
- */
 function showLocalXmlUploadDialog() {
-  const html = HtmlService.createHtmlOutputFromFile('index')
-    .setWidth(400)
-    .setHeight(250);
+  const html = HtmlService.createHtmlOutputFromFile('index').setWidth(400).setHeight(250);
   SpreadsheetApp.getUi().showModalDialog(html, 'Cargar Archivos XML Locales');
 }
 
-/**
- * Saves the FIEL credentials to script properties.
- */
+function showSatDownloadDialog() {
+  // This could be expanded to show a dialog for date ranges.
+  runDescargaMasivaCfdi();
+}
+
+function showChartOfAccountsDialog() {
+    SpreadsheetApp.getUi().alert('Función no implementada', 'El administrador del Catálogo de Cuentas se añadirá en una futura actualización.', SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
 function saveFielCredentials(form) {
   try {
     if (!form.rfc || !form.certificatePem || !form.privateKeyPem || !form.issuerName || !form.serialNumber) {
@@ -64,8 +57,248 @@ function saveFielCredentials(form) {
   }
 }
 
+
 // =================================================================
-// GLOBAL CONSTANTS & CONFIG
+// 2. UNIFIED PARSING & SHEET WRITING LOGIC
+// =================================================================
+
+function getUnifiedHeaderRow() {
+  return [
+    'Periodo', 'Fecha', 'Tipo', 'Serie', 'Folio', 'UUID', 'RFC Emisor', 'Nombre Emisor',
+    'RFC Receptor', 'Nombre Receptor', 'Forma Pago', 'Método Pago', 'Uso CFDI', 'Moneda',
+    'Subtotal', 'Descuento', 'IVA Trasladado', 'IEPS', 'Ret ISR', 'Ret IVA', 'Total',
+    'Estado Cancelacion', 'ClaveProdServ', 'Cantidad', 'ClaveUnidad', 'Descripcion', 'ValorUnitario', 'Importe'
+  ];
+}
+
+function getSafeAttribute(element, attributeName) {
+  if (!element) return '';
+  const attribute = element.getAttribute(attributeName);
+  return attribute ? attribute.getValue() : '';
+}
+
+function parseCfdiXml(xmlContent) {
+  const document = XmlService.parse(xmlContent);
+  const root = document.getRootElement();
+  const cfdi = root.getNamespace();
+  const tfd = XmlService.getNamespace('tfd', 'http://www.sat.gob.mx/TimbreFiscalDigital');
+
+  const comprobante = root;
+  const emisor = comprobante.getChild('Emisor', cfdi);
+  const receptor = comprobante.getChild('Receptor', cfdi);
+  const conceptos = comprobante.getChild('Conceptos', cfdi).getChildren('Concepto', cfdi);
+  const timbre = comprobante.getChild('Complemento', cfdi).getChild('TimbreFiscalDigital', tfd);
+  const impuestosNode = comprobante.getChild('Impuestos', cfdi);
+
+  let ivaTrasladado = 0, ieps = 0, isrRetenido = 0, ivaRetenido = 0;
+  if (impuestosNode) {
+    const traslados = impuestosNode.getChild('Traslados', cfdi);
+    if (traslados) {
+      traslados.getChildren('Traslado', cfdi).forEach(t => {
+        const impuesto = getSafeAttribute(t, 'Impuesto');
+        const importe = parseFloat(getSafeAttribute(t, 'Importe')) || 0;
+        if (impuesto === '002') ivaTrasladado += importe;
+        else if (impuesto === '003') ieps += importe;
+      });
+    }
+    const retenciones = impuestosNode.getChild('Retenciones', cfdi);
+    if (retenciones) {
+      retenciones.getChildren('Retencion', cfdi).forEach(r => {
+        const impuesto = getSafeAttribute(r, 'Impuesto');
+        const importe = parseFloat(getSafeAttribute(r, 'Importe')) || 0;
+        if (impuesto === '001') isrRetenido += importe;
+        else if (impuesto === '002') ivaRetenido += importe;
+      });
+    }
+  }
+
+  const fecha = getSafeAttribute(comprobante, 'Fecha').split('T')[0];
+  const period = fecha ? fecha.substring(0, 7) : '';
+  const tipoDeComprobante = getSafeAttribute(comprobante, 'TipoDeComprobante');
+
+  const generalData = {
+    Periodo: period, Fecha: fecha, Tipo: tipoDeComprobante,
+    Serie: getSafeAttribute(comprobante, 'Serie'), Folio: getSafeAttribute(comprobante, 'Folio'),
+    UUID: getSafeAttribute(timbre, 'UUID'),
+    RFCEmisor: getSafeAttribute(emisor, 'Rfc'), NombreEmisor: getSafeAttribute(emisor, 'Nombre'),
+    RFCReceptor: getSafeAttribute(receptor, 'Rfc'), NombreReceptor: getSafeAttribute(receptor, 'Nombre'),
+    FormaPago: getSafeAttribute(comprobante, 'FormaPago'), MetodoPago: getSafeAttribute(comprobante, 'MetodoPago'),
+    UsoCFDI: getSafeAttribute(receptor, 'UsoCFDI'), Moneda: getSafeAttribute(comprobante, 'Moneda'),
+    Subtotal: parseFloat(getSafeAttribute(comprobante, 'SubTotal') || '0'),
+    Descuento: parseFloat(getSafeAttribute(comprobante, 'Descuento') || '0'),
+    IVATrasladado: ivaTrasladado, IEPS: ieps, RetISR: isrRetenido, RetIVA: ivaRetenido,
+    Total: parseFloat(getSafeAttribute(comprobante, 'Total') || '0'),
+    EstadoCancelacion: '' // Placeholder
+  };
+
+  const rows = [];
+  conceptos.forEach((concepto, index) => {
+    const isFirstLine = index === 0;
+    const row = [
+      generalData.Periodo, generalData.Fecha, generalData.Tipo, generalData.Serie, generalData.Folio, generalData.UUID,
+      generalData.RFCEmisor, generalData.NombreEmisor, generalData.RFCReceptor, generalData.NombreReceptor,
+      generalData.FormaPago, generalData.MetodoPago, generalData.UsoCFDI, generalData.Moneda,
+      isFirstLine ? generalData.Subtotal.toFixed(2) : '', isFirstLine ? generalData.Descuento.toFixed(2) : '',
+      isFirstLine ? generalData.IVATrasladado.toFixed(2) : '', isFirstLine ? generalData.IEPS.toFixed(2) : '',
+      isFirstLine ? generalData.RetISR.toFixed(2) : '', isFirstLine ? generalData.RetIVA.toFixed(2) : '',
+      isFirstLine ? generalData.Total.toFixed(2) : '',
+      generalData.EstadoCancelacion,
+      getSafeAttribute(concepto, 'ClaveProdServ'), parseFloat(getSafeAttribute(concepto, 'Cantidad') || '0'),
+      getSafeAttribute(concepto, 'ClaveUnidad'), getSafeAttribute(concepto, 'Descripcion'),
+      parseFloat(getSafeAttribute(concepto, 'ValorUnitario') || '0').toFixed(2), parseFloat(getSafeAttribute(concepto, 'Importe') || '0').toFixed(2)
+    ];
+    rows.push(row);
+  });
+
+  const contacts = [
+    { rfc: generalData.RFCEmisor, nombre: generalData.NombreEmisor, role: 'Emisor', tipoDeComprobante: tipoDeComprobante },
+    { rfc: generalData.RFCReceptor, nombre: generalData.NombreReceptor, role: 'Receptor', tipoDeComprobante: tipoDeComprobante }
+  ];
+
+  return { rows: rows, contacts: contacts, tipoDeComprobante: tipoDeComprobante };
+}
+
+function writeDataToSheet(sheetName, rows) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+  let startRow = sheet.getLastRow() + 1;
+  if (startRow === 1) {
+    sheet.appendRow(getUnifiedHeaderRow());
+    startRow++;
+  }
+  if (rows.length > 0) {
+    const range = sheet.getRange(startRow, 1, rows.length, rows[0].length);
+    range.setValues(rows);
+  }
+}
+
+// =================================================================
+// 3. CONTACT & CONFIG MANAGEMENT
+// =================================================================
+
+function setupConfigurationSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const configSheetName = 'Configuracion';
+  let sheet = ss.getSheetByName(configSheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(configSheetName);
+    sheet.getRange('A1').setValue('CONTACTOS').setFontWeight('bold');
+    sheet.getRange('A2:C2').setValues([['RFC', 'Nombre', 'Tipo']]).setFontWeight('bold');
+    sheet.getRange('E1').setValue('CATALOGO DE CUENTAS').setFontWeight('bold');
+    sheet.getRange('E2:F2').setValues([['Codigo', 'Nombre de Cuenta']]).setFontWeight('bold');
+    sheet.autoResizeColumns(1, 6);
+  }
+}
+
+function updateContactsDatabase(contacts) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const configSheet = ss.getSheetByName('Configuracion');
+  if (!configSheet) {
+      setupConfigurationSheet();
+      configSheet = ss.getSheetByName('Configuracion');
+  };
+
+  const contactRange = configSheet.getRange('A3:A');
+  const existingRfcs = new Set(contactRange.getValues().flat().filter(String));
+  const userRfc = PropertiesService.getScriptProperties().getProperty('FIEL_RFC');
+  const newContacts = [];
+  const uniqueNewRfcs = new Set();
+
+  contacts.forEach(contact => {
+    if (!contact.rfc || contact.rfc === userRfc || existingRfcs.has(contact.rfc) || uniqueNewRfcs.has(contact.rfc)) {
+      return;
+    }
+    let tipo = '';
+    if (contact.tipoDeComprobante === 'I' && contact.role === 'Receptor') tipo = 'Cliente';
+    else if (contact.tipoDeComprobante === 'E' && contact.role === 'Emisor') tipo = 'Proveedor';
+
+    if (tipo) {
+      newContacts.push([contact.rfc, contact.nombre, tipo]);
+      uniqueNewRfcs.add(contact.rfc);
+    }
+  });
+
+  if (newContacts.length > 0) {
+    const lastContactRow = configSheet.getRange('A:A').getValues().filter(String).length;
+    configSheet.getRange(lastContactRow + 1, 1, newContacts.length, 3).setValues(newContacts);
+  }
+}
+
+// =================================================================
+// 4. WORKFLOWS (Local Upload & SAT Download)
+// =================================================================
+
+function processLocalFiles(formObject) {
+  try {
+    const filesContent = formObject.files;
+    if (!filesContent || filesContent.length === 0) throw new Error("No files were uploaded.");
+
+    let incomeRows = [], expenseRows = [], allContacts = [];
+    filesContent.forEach(xmlContent => {
+      const parsedData = parseCfdiXml(xmlContent);
+      allContacts = allContacts.concat(parsedData.contacts);
+      if (parsedData.tipoDeComprobante === 'I') incomeRows = incomeRows.concat(parsedData.rows);
+      else if (parsedData.tipoDeComprobante === 'E') expenseRows = expenseRows.concat(parsedData.rows);
+    });
+
+    if (incomeRows.length > 0) writeDataToSheet('XML_I', incomeRows);
+    if (expenseRows.length > 0) writeDataToSheet('XML_E', expenseRows);
+    if (allContacts.length > 0) updateContactsDatabase(allContacts);
+
+    return { status: 'success', message: `Carga manual procesada.` };
+  } catch (e) {
+    return { status: 'error', message: 'Error: ' + e.message };
+  }
+}
+
+function runDescargaMasivaCfdi() {
+  const config = getScriptConfig();
+  assertConfig(config);
+  descargarCfdiMasivo(config.defaultOptions);
+}
+
+function descargarCfdiMasivo(userOptions) {
+  const config = getScriptConfig();
+  assertConfig(config);
+  const options = mergeOptions(config.defaultOptions, userOptions || {});
+  validarOpciones(options);
+  const token = obtenerToken(config);
+  const solicitud = solicitarDescarga(config, options, token);
+  const requestId = solicitud.IdSolicitud;
+  const status = esperarPaquetes(config, requestId, token);
+
+  let incomeRows = [], expenseRows = [], allContacts = [];
+
+  status.IdsPaquetes.forEach(function (paqueteId) {
+    const paquete = descargarPaquete(config, paqueteId, token);
+    const zipBlob = Utilities.newBlob(paquete.zipBytes, 'application/zip', paquete.id + '.zip');
+    const blobs = Utilities.unzip(zipBlob);
+
+    blobs.forEach(function(blob) {
+        const xmlTexto = blob.getDataAsString('UTF-8');
+        try {
+            const parsedData = parseCfdiXml(xmlTexto);
+            allContacts = allContacts.concat(parsedData.contacts);
+            if (parsedData.tipoDeComprobante === 'I') incomeRows = incomeRows.concat(parsedData.rows);
+            else if (parsedData.tipoDeComprobante === 'E') expenseRows = expenseRows.concat(parsedData.rows);
+        } catch (e) {
+            Logger.log('No se pudo interpretar ' + blob.getName() + ': ' + e.message);
+        }
+    });
+  });
+
+  if (incomeRows.length > 0) writeDataToSheet('XML_I', incomeRows);
+  if (expenseRows.length > 0) writeDataToSheet('XML_E', expenseRows);
+  if (allContacts.length > 0) updateContactsDatabase(allContacts);
+
+  SpreadsheetApp.getUi().alert('Descarga completada', `Se procesaron ${status.IdsPaquetes.length} paquetes.`, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+// =================================================================
+// 5. SAT HELPER FUNCTIONS
 // =================================================================
 
 const SAT_NS = {
@@ -163,223 +396,6 @@ function assertConfig(config) {
     throw new Error('SAT_ENVIRONMENT debe ser PRODUCTION o TEST');
   }
 }
-
-// =================================================================
-// UNIFIED PARSING & SHEET WRITING LOGIC
-// =================================================================
-
-/**
- * Defines the single, unified header row for all XML data.
- */
-function getUnifiedHeaderRow() {
-  return [
-    'Periodo', 'Fecha', 'Serie', 'Folio', 'UUID', 'RFC_Emisor', 'RFC_Receptor',
-    'Metodo(PUE/PPD)', 'TasaIVA(0/0.08/0.16)', 'Subtotal', 'Descuento',
-    'IVA_Trasladado', 'IEPS', 'Ret_ISR', 'Ret_IVA', 'Total'
-  ];
-}
-
-/**
- * Helper function to safely get an attribute value from an element.
- */
-function getSafeAttribute(element, attributeName) {
-  if (!element) return '';
-  const attribute = element.getAttribute(attributeName);
-  return attribute ? attribute.getValue() : '';
-}
-
-/**
- * The single, unified parser for any CFDI XML content.
- */
-function parseAndFormatCfdi(xmlContent) {
-  const document = XmlService.parse(xmlContent);
-  const root = document.getRootElement();
-  const cfdi = root.getNamespace();
-  const tfd = XmlService.getNamespace('tfd', 'http://www.sat.gob.mx/TimbreFiscalDigital');
-
-  const comprobante = root;
-  const emisor = comprobante.getChild('Emisor', cfdi);
-  const receptor = comprobante.getChild('Receptor', cfdi);
-  const timbre = comprobante.getChild('Complemento', cfdi).getChild('TimbreFiscalDigital', tfd);
-  const impuestosNode = comprobante.getChild('Impuestos', cfdi);
-
-  let ivaTrasladado = 0, ieps = 0, isrRetenido = 0, ivaRetenido = 0, tasaIVA = 0;
-  const subtotal = parseFloat(getSafeAttribute(comprobante, 'SubTotal')) || 0;
-
-  if (impuestosNode) {
-    const traslados = impuestosNode.getChild('Traslados', cfdi);
-    if (traslados) {
-      traslados.getChildren('Traslado', cfdi).forEach(t => {
-        const impuesto = getSafeAttribute(t, 'Impuesto');
-        const importe = parseFloat(getSafeAttribute(t, 'Importe')) || 0;
-        if (impuesto === '002') ivaTrasladado += importe;
-        else if (impuesto === '003') ieps += importe;
-      });
-    }
-    const retenciones = impuestosNode.getChild('Retenciones', cfdi);
-    if (retenciones) {
-      retenciones.getChildren('Retencion', cfdi).forEach(r => {
-        const impuesto = getSafeAttribute(r, 'Impuesto');
-        const importe = parseFloat(getSafeAttribute(r, 'Importe')) || 0;
-        if (impuesto === '001') isrRetenido += importe;
-        else if (impuesto === '002') ivaRetenido += importe;
-      });
-    }
-  }
-
-  if (subtotal > 0 && ivaTrasladado > 0) {
-      const effectiveRate = (ivaTrasladado / subtotal);
-      if (effectiveRate > 0.12) tasaIVA = 0.16;
-      else if (effectiveRate > 0.04) tasaIVA = 0.08;
-      else tasaIVA = 0;
-  }
-
-  const fecha = getSafeAttribute(comprobante, 'Fecha').split('T')[0];
-  const period = fecha ? fecha.substring(0, 7) : '';
-  const tipoDeComprobante = getSafeAttribute(comprobante, 'TipoDeComprobante');
-
-  const rowData = [
-    period, fecha, getSafeAttribute(comprobante, 'Serie'), getSafeAttribute(comprobante, 'Folio'),
-    getSafeAttribute(timbre, 'UUID'), getSafeAttribute(emisor, 'Rfc'), getSafeAttribute(receptor, 'Rfc'),
-    getSafeAttribute(comprobante, 'MetodoPago'), tasaIVA, subtotal.toFixed(2),
-    getSafeAttribute(comprobante, 'Descuento') || '0.00', ivaTrasladado.toFixed(2), ieps.toFixed(2),
-    isrRetenido.toFixed(2), ivaRetenido.toFixed(2), getSafeAttribute(comprobante, 'Total'),
-  ];
-
-  return { tipoDeComprobante: tipoDeComprobante, rowData: rowData };
-}
-
-/**
- * Writes an array of rows to a specified sheet and replicates formulas.
- */
-function writeDataToSheet(sheetName, rows) {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  let sheet = ss.getSheetByName(sheetName);
-  if (!sheet) {
-    sheet = ss.insertSheet(sheetName);
-  }
-
-  let startRow = sheet.getLastRow() + 1;
-  if (startRow === 1) {
-    sheet.appendRow(getUnifiedHeaderRow());
-    startRow++;
-  }
-
-  if (rows.length > 0) {
-    const range = sheet.getRange(startRow, 1, rows.length, rows[0].length);
-    range.setValues(rows);
-    replicateFormulas(sheet, startRow, rows.length);
-  }
-}
-
-/**
- * Replicates formulas from row 2 to newly added rows.
- */
-function replicateFormulas(sheet, startRow, numRows) {
-  const lastCol = sheet.getLastColumn();
-  const formulaStartCol = 16; // Column P
-
-  if (lastCol < formulaStartCol || sheet.getLastRow() < 2 || numRows === 0) return;
-
-  const formulaRange = sheet.getRange(2, formulaStartCol, 1, lastCol - formulaStartCol + 1);
-  const formulas = formulaRange.getFormulasR1C1();
-
-  const targetRange = sheet.getRange(startRow, formulaStartCol, numRows, formulas[0].length);
-  targetRange.setFormulasR1C1(formulas);
-}
-
-// =================================================================
-// LOCAL FILE UPLOAD WORKFLOW
-// =================================================================
-
-/**
- * Main function to process locally uploaded XML files.
- */
-function processLocalFiles(formObject) {
-  try {
-    const filesContent = formObject.files;
-    if (!filesContent || filesContent.length === 0) throw new Error("No files were uploaded.");
-
-    const incomeRows = [];
-    const expenseRows = [];
-
-    filesContent.forEach(xmlContent => {
-      const parsedData = parseAndFormatCfdi(xmlContent);
-      if (parsedData.tipoDeComprobante === 'I') {
-        incomeRows.push(parsedData.rowData);
-      } else if (parsedData.tipoDeComprobante === 'E') {
-        expenseRows.push(parsedData.rowData);
-      }
-    });
-
-    if (incomeRows.length > 0) writeDataToSheet('XML_I', incomeRows);
-    if (expenseRows.length > 0) writeDataToSheet('XML_E', expenseRows);
-
-    const message = `Carga manual procesada. Se agregaron ${incomeRows.length} filas de ingresos y ${expenseRows.length} filas de gastos.`;
-    return { status: 'success', message: message };
-
-  } catch (e) {
-    Logger.log('Error en processLocalFiles: ' + e.toString());
-    return { status: 'error', message: 'Error: ' + e.message };
-  }
-}
-
-
-// =================================================================
-// SAT DOWNLOAD WORKFLOW
-// =================================================================
-
-function runDescargaMasivaCfdi() {
-  const config = getScriptConfig();
-  assertConfig(config);
-  descargarCfdiMasivo(config.defaultOptions);
-}
-
-function descargarCfdiMasivo(userOptions) {
-  const config = getScriptConfig();
-  assertConfig(config);
-  const options = mergeOptions(config.defaultOptions, userOptions || {});
-  validarOpciones(options);
-
-  const token = obtenerToken(config);
-  const solicitud = solicitarDescarga(config, options, token);
-  const requestId = solicitud.IdSolicitud;
-  const status = esperarPaquetes(config, requestId, token);
-
-  const incomeRows = [];
-  const expenseRows = [];
-
-  status.IdsPaquetes.forEach(function (paqueteId) {
-    const paquete = descargarPaquete(config, paqueteId, token);
-    const zipBlob = Utilities.newBlob(paquete.zipBytes, 'application/zip', paquete.id + '.zip');
-    const blobs = Utilities.unzip(zipBlob);
-
-    blobs.forEach(function(blob) {
-        const xmlTexto = blob.getDataAsString('UTF-8');
-        try {
-            const parsedData = parseAndFormatCfdi(xmlTexto);
-            if (parsedData.tipoDeComprobante === 'I') {
-                incomeRows.push(parsedData.rowData);
-            } else if (parsedData.tipoDeComprobante === 'E') {
-                expenseRows.push(parsedData.rowData);
-            }
-        } catch (e) {
-            Logger.log('No se pudo interpretar ' + blob.getName() + ': ' + e.message);
-        }
-    });
-  });
-
-  if (incomeRows.length > 0) writeDataToSheet('XML_I', incomeRows);
-  if (expenseRows.length > 0) writeDataToSheet('XML_E', expenseRows);
-
-  SpreadsheetApp.getUi().alert('Descarga completada', `Se procesaron ${status.IdsPaquetes.length} paquetes.`, SpreadsheetApp.getUi().ButtonSet.OK);
-
-  return {
-    requestId: requestId,
-    paquetes: status.IdsPaquetes,
-  };
-}
-
 
 function mergeOptions(base, override) {
   const resultado = Object.assign({}, base);
