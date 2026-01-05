@@ -1,145 +1,153 @@
 /**
  * @file polizas.gs
- * @description Módulo para la generación de pólizas contables automáticas.
- * Contiene las reglas de negocio para traducir los CFDI y movimientos bancarios
- * en asientos de diario, ingreso y egreso.
+ * @description Módulo para la generación de pólizas contables a partir de datos de CFDI.
  *
  * @author Jules
- * @version 1.0.0
+ * @version 3.3.0
  */
+
+const CUENTAS_CLAVE = {
+  IVA_ACREDITABLE_PAGADO: "118.01",
+  IVA_ACREDITABLE_PENDIENTE: "118.02",
+  IVA_TRASLADADO_COBRADO: "208.01",
+  IVA_TRASLADADO_PENDIENTE: "208.02",
+  CLIENTES: "105.01",
+  PROVEEDORES: "201.01",
+  BANCOS: "102.01",
+  DEVOLUCION_VENTA: "402.01", // Cuenta para devoluciones sobre venta
+  DEVOLUCION_COMPRA: "502.01" // Cuenta para devoluciones sobre compra
+};
+
+let cacheMapeoDeCuentas = null;
 
 /**
- * Orquesta la generación de todas las pólizas automáticas.
- * Limpia la hoja de pólizas y la regenera a partir de los datos de la hoja XML.
+ * Genera la póliza contable para un CFDI, delegando al tipo de comprobante correcto.
+ * @param {object} cfdiData - Datos parseados del CFDI.
+ * @param {string} nuestroRfc - RFC de la empresa que opera el sistema.
+ * @return {Array<Array>} La póliza como un array de asientos.
  */
-function generatePolicies() {
-  const ui = SpreadsheetApp.getUi();
-  const response = ui.alert('Confirmación', 'Este proceso borrará las pólizas existentes y las generará de nuevo a partir de la hoja "XML". ¿Desea continuar?', ui.ButtonSet.YES_NO);
-  if (response !== ui.Button.YES) {
-    return;
+function generarPoliza(cfdiData, nuestroRfc) {
+  const { tipo, receptorRfc } = cfdiData;
+  const esGasto = receptorRfc.toUpperCase() === nuestroRfc.toUpperCase();
+
+  switch (tipo) {
+    case 'I':
+      return esGasto ? generarPolizaGasto(cfdiData) : generarPolizaIngreso(cfdiData);
+    case 'E':
+      return esGasto ? generarPolizaDevolucionCompra(cfdiData) : generarPolizaDevolucionVenta(cfdiData);
+    case 'P':
+      return esGasto ? generarPolizaPagoAProveedor(cfdiData) : generarPolizaCobroACliente(cfdiData);
+    default:
+      Logger.log(`Tipo de comprobante '${tipo}' no soportado.`);
+      return [];
   }
+}
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const xmlSheet = ss.getSheetByName(SHEETS.XML);
-  const polizasSheet = ss.getSheetByName(SHEETS.POLIZAS);
+function generarPolizaIngreso(cfdiData) {
+  const { metodoPago, total, subtotal, ivaTrasladado, uuid, claveProdServ, usoCFDI } = cfdiData;
+  const poliza = [], fecha = cfdiData.fecha.substring(0, 10), polizaId = `DI-${Date.now()}`;
+  const cuentaIngreso = obtenerCuentaPorMapeo(claveProdServ, usoCFDI, 'INGRESO');
+  const concepto = `Venta s/factura ${uuid.substring(0, 8)}`;
 
-  // Limpiar pólizas anteriores (excepto el encabezado)
-  const lastRow = polizasSheet.getLastRow();
-  if (lastRow > 1) {
-    polizasSheet.getRange(2, 1, lastRow - 1, polizasSheet.getMaxColumns()).clearContent();
-  }
-
-  const xmlData = xmlSheet.getDataRange().getValues();
-  let policies = [];
-
-  // Generar pólizas desde CFDI
-  const cfdiPolicies = generatePoliciesFromCfdi(xmlData);
-  policies = policies.concat(cfdiPolicies);
-
-  // Escribir las nuevas pólizas en la hoja "Polizas"
-  if (policies.length > 0) {
-    updatePoliciesSheet(policies);
-    ui.alert('Éxito', `Se generaron ${policies.length} nuevos asientos contables.`, ui.ButtonSet.OK);
+  if (metodoPago === 'PUE') {
+    poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.BANCOS, concepto, total, 0]);
+    poliza.push([fecha, polizaId, uuid, cuentaIngreso, concepto, 0, subtotal]);
+    if (ivaTrasladado > 0) poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.IVA_TRASLADADO_COBRADO, concepto, 0, ivaTrasladado]);
   } else {
-    ui.alert('Información', 'No se encontraron datos en la hoja XML para generar pólizas.', ui.ButtonSet.OK);
+    poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.CLIENTES, concepto, total, 0]);
+    poliza.push([fecha, polizaId, uuid, cuentaIngreso, concepto, 0, subtotal]);
+    if (ivaTrasladado > 0) poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.IVA_TRASLADADO_PENDIENTE, concepto, 0, ivaTrasladado]);
+  }
+  return poliza;
+}
+
+function generarPolizaGasto(cfdiData) {
+  const { metodoPago, total, subtotal, ivaTrasladado, uuid, claveProdServ, usoCFDI } = cfdiData;
+  const poliza = [], fecha = cfdiData.fecha.substring(0, 10), polizaId = `EG-${Date.now()}`;
+  const cuentaGasto = obtenerCuentaPorMapeo(claveProdServ, usoCFDI, 'GASTO');
+  const concepto = `Compra s/factura ${uuid.substring(0, 8)}`;
+
+  if (metodoPago === 'PUE') {
+    poliza.push([fecha, polizaId, uuid, cuentaGasto, concepto, subtotal, 0]);
+    if (ivaTrasladado > 0) poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.IVA_ACREDITABLE_PAGADO, concepto, ivaTrasladado, 0]);
+    poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.BANCOS, concepto, 0, total]);
+  } else {
+    poliza.push([fecha, polizaId, uuid, cuentaGasto, concepto, subtotal, 0]);
+    if (ivaTrasladado > 0) poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.IVA_ACREDITABLE_PENDIENTE, concepto, ivaTrasladado, 0]);
+    poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.PROVEEDORES, concepto, 0, total]);
+  }
+  return poliza;
+}
+
+function generarPolizaDevolucionVenta(cfdiData) {
+  const { total, subtotal, ivaTrasladado, uuid } = cfdiData;
+  const poliza = [], fecha = cfdiData.fecha.substring(0, 10), polizaId = `DI-${Date.now()}`;
+  const concepto = `Devolución s/venta ${uuid.substring(0, 8)}`;
+
+  poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.DEVOLUCION_VENTA, concepto, subtotal, 0]);
+  if (ivaTrasladado > 0) poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.IVA_TRASLADADO_PENDIENTE, concepto, ivaTrasladado, 0]);
+  poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.CLIENTES, concepto, 0, total]);
+  return poliza;
+}
+
+function generarPolizaDevolucionCompra(cfdiData) {
+  const { total, subtotal, ivaTrasladado, uuid } = cfdiData;
+  const poliza = [], fecha = cfdiData.fecha.substring(0, 10), polizaId = `EG-${Date.now()}`;
+  const concepto = `Devolución s/compra ${uuid.substring(0, 8)}`;
+
+  poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.PROVEEDORES, concepto, total, 0]);
+  poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.DEVOLUCION_COMPRA, concepto, 0, subtotal]);
+  if (ivaTrasladado > 0) poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.IVA_ACREDITABLE_PENDIENTE, concepto, 0, ivaTrasladado]);
+  return poliza;
+}
+
+function generarPolizaCobroACliente(cfdiData) {
+  const { total, uuid, uuidRelacionado, pagoIvaTrasladado } = cfdiData;
+  const poliza = [], fecha = cfdiData.fecha.substring(0, 10), polizaId = `IN-${Date.now()}`;
+  const concepto = `Cobro s/factura ${uuidRelacionado ? uuidRelacionado.substring(0, 8) : ''}`;
+
+  poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.BANCOS, concepto, total, 0]);
+  poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.CLIENTES, concepto, 0, total]);
+  if (pagoIvaTrasladado > 0) {
+    poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.IVA_TRASLADADO_PENDIENTE, "Reclasificación IVA", pagoIvaTrasladado, 0]);
+    poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.IVA_TRASLADADO_COBRADO, "Reclasificación IVA", 0, pagoIvaTrasladado]);
+  }
+  return poliza;
+}
+
+function generarPolizaPagoAProveedor(cfdiData) {
+  const { total, uuid, uuidRelacionado, pagoIvaTrasladado } = cfdiData;
+  const poliza = [], fecha = cfdiData.fecha.substring(0, 10), polizaId = `EG-${Date.now()}`;
+  const concepto = `Pago s/factura ${uuidRelacionado ? uuidRelacionado.substring(0, 8) : ''}`;
+
+  poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.PROVEEDORES, concepto, total, 0]);
+  poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.BANCOS, concepto, 0, total]);
+  if (pagoIvaTrasladado > 0) {
+    poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.IVA_ACREDITABLE_PAGADO, "Reclasificación IVA", pagoIvaTrasladado, 0]);
+    poliza.push([fecha, polizaId, uuid, CUENTAS_CLAVE.IVA_ACREDITABLE_PENDIENTE, "Reclasificación IVA", 0, pagoIvaTrasladado]);
+  }
+  return poliza;
+}
+
+function obtenerCuentaPorMapeo(claveProdServ, usoCFDI, tipoPoliza) {
+  if (cacheMapeoDeCuentas === null) {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Mapeo_ProdServ_Cuenta');
+    const lastRow = sheet.getLastRow();
+    cacheMapeoDeCuentas = lastRow < 2 ? [] : sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+    Logger.log("Caché de mapeo de cuentas inicializada.");
+  }
+  for (const row of cacheMapeoDeCuentas) if (row[0] == claveProdServ && row[1] == usoCFDI) return row[2];
+  for (const row of cacheMapeoDeCuentas) if (row[0] == claveProdServ) return row[2];
+  return tipoPoliza === 'INGRESO' ? '401.01' : '601.01';
+}
+
+function registrarPolizaEnSheet(poliza) {
+  if (poliza && poliza.length > 0) {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Pólizas');
+    sheet.getRange(sheet.getLastRow() + 1, 1, poliza.length, poliza[0].length).setValues(poliza);
   }
 }
 
-/**
- * Genera pólizas a partir de los datos de CFDI, buscando dinámicamente las cuentas de clientes/proveedores.
- * @param {Array<Array<any>>} xmlData Datos de la hoja XML.
- * @returns {Array<Array<any>>} Un array de filas de pólizas.
- */
-function generatePoliciesFromCfdi(xmlData) {
-  const policies = [];
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  // Crear un mapa de RFC a Cuenta Contable desde la hoja Entidades
-  const entidadesSheet = ss.getSheetByName(SHEETS.ENTITIES);
-  const entidadesData = entidadesSheet.getRange(2, 1, entidadesSheet.getLastRow() - 1, 4).getValues(); // RFC, Razon Social, Tipo, Cuenta Contable
-  const rfcToAccountMap = new Map(entidadesData.map(row => [row[0], row[3]]));
-
-  const headers = xmlData.shift(); // Quitar encabezados
-
-  xmlData.forEach(row => {
-    const tipo = row[3]; // 'I', 'E', 'P'
-    const subtotal = parseFloat(row[7]) || 0;
-    const iva = parseFloat(row[8]) || 0;
-    const total = parseFloat(row[9]) || 0;
-    const uuid = row[0];
-    const rfcEmisor = row[1];
-    const rfcReceptor = row[2];
-
-    if (tipo === 'I') { // Póliza de Ingreso (Venta)
-      const clienteAccount = rfcToAccountMap.get(rfcReceptor) || '105.00'; // Fallback a Clientes Generales
-      // Cargo a Clientes (105.xx)
-      policies.push(createPolicyLine('Ingreso', uuid, clienteAccount, 'CLIENTES', total, 0));
-      // Abono a Ventas (401.01) - Hardcoded por ahora
-      policies.push(createPolicyLine('Ingreso', uuid, '401.01', 'VENTAS GRAVADAS', 0, subtotal));
-      // Abono a IVA por Pagar (209.01) - Hardcoded por ahora
-      policies.push(createPolicyLine('Ingreso', uuid, '209.01', 'IVA TRASLADADO', 0, iva));
-    } else if (tipo === 'E') { // Póliza de Egreso (Gasto/Compra)
-      const proveedorAccount = rfcToAccountMap.get(rfcEmisor) || '201.00'; // Fallback a Proveedores Generales
-      // Cargo a Gastos/Compras (5xx.xx / 115.xx) - Hardcoded por ahora
-      policies.push(createPolicyLine('Egreso', uuid, '501.01', 'GASTOS GENERALES', subtotal, 0));
-      // Cargo a IVA Acreditable (118.01) - Hardcoded por ahora
-      policies.push(createPolicyLine('Egreso', uuid, '118.01', 'IVA ACREDITABLE', iva, 0));
-      // Abono a Proveedores (201.xx)
-      policies.push(createPolicyLine('Egreso', uuid, proveedorAccount, 'PROVEEDORES', 0, total));
-    }
-  });
-
-  return policies;
-}
-
-/**
- * Genera pólizas a partir de los datos bancarios.
- * @param {Array<Array<any>>} bankData Datos de la hoja Bancos.
- * @returns {Array<Array<any>>} Un array de filas de pólizas.
- */
-function generatePoliciesFromBank(bankData) {
-  // Lógica para pólizas de cobro y pago, cruzando contra XML si es posible.
-  return [];
-}
-
-/**
- * Crea una línea (asiento) de póliza estandarizada.
- * @param {string} type Tipo de póliza (Diario, Ingreso, Egreso).
- * @param {string} reference Referencia (UUID, folio, etc.).
- * @param {string} account Cuenta contable.
- * @param {string} concept Concepto del movimiento.
- * @param {number} debe Monto en el debe.
- * @param {number} haber Monto en el haber.
- * @returns {Array<any>} Una fila lista para insertar en la hoja "Polizas".
- */
-function createPolicyLine(type, reference, account, concept, debe, haber) {
-  return [
-    new Date(), // Fecha de la póliza
-    type,
-    '', // Folio (se puede generar después)
-    account,
-    '', // Subcuenta (lógica de clientes/proveedores dinámicos)
-    concept,
-    reference,
-    debe,
-    haber,
-    reference, // UUID
-    'Auto' // Estatus
-  ];
-}
-
-/**
- * Escribe las pólizas generadas en la hoja correspondiente.
- * @param {Array<Array<any>>} policies Las filas de pólizas a insertar.
- */
-function updatePoliciesSheet(policies) {
-  if (!policies || policies.length === 0) {
-    return;
-  }
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(SHEETS.POLIZAS);
-  const startRow = sheet.getLastRow() + 1;
-
-  sheet.getRange(startRow, 1, policies.length, policies[0].length).setValues(policies);
-  SpreadsheetApp.getUi().alert(`Se generaron y agregaron ${policies.length} asientos a la hoja "Polizas".`);
+function registrarEnLog(uuid) {
+  SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Log_Procesados').appendRow([uuid, new Date()]);
 }

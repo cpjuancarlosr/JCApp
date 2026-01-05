@@ -1,86 +1,112 @@
 /**
  * @file xml_parser.gs
- * @description Módulo para parsear (analizar) el contenido de los archivos XML (CFDI)
- * y extraer la información relevante para ser volcada en la hoja "XML".
+ * @description Módulo para parsear (analizar) XML de CFDI y extraer información clave.
  *
  * @author Jules
- * @version 1.0.0
+ * @version 3.0.0
  */
 
-/**
- * Parsea el contenido de un string XML de un CFDI y extrae los datos clave.
- * @param {string} xmlContent El contenido del archivo XML.
- * @returns {Array|null} Un array con los datos estructurados para una fila de la hoja "XML", o null si hay un error.
- */
-function parseXml(xmlContent) {
-  try {
-    const document = XmlService.parse(xmlContent);
-    const root = document.getRootElement();
-    const nsCfdi = root.getNamespace();
-    const nsTfd = XmlService.getNamespace('tfd', 'http://www.sat.gob.mx/TimbreFiscalDigital');
-
-    const emisor = root.getChild('Emisor', nsCfdi);
-    const receptor = root.getChild('Receptor', nsCfdi);
-    const complemento = root.getChild('Complemento', nsCfdi);
-    const timbre = complemento.getChild('TimbreFiscalDigital', nsTfd);
-
-    const uuid = timbre.getAttribute('UUID').getValue();
-    const emisorRfc = emisor.getAttribute('Rfc').getValue();
-    const receptorRfc = receptor.getAttribute('Rfc').getValue();
-    const tipo = root.getAttribute('TipoDeComprobante').getValue();
-    const fecha = root.getAttribute('Fecha').getValue();
-    const subtotal = root.getAttribute('SubTotal').getValue();
-    const total = root.getAttribute('Total').getValue();
-    const moneda = root.getAttribute('Moneda').getValue();
-
-    // Estos campos pueden no existir y necesitan manejo de errores
-    const metodoPago = root.getAttribute('MetodoPago') ? root.getAttribute('MetodoPago').getValue() : '';
-    const formaPago = root.getAttribute('FormaPago') ? root.getAttribute('FormaPago').getValue() : '';
-    const usoCfdi = receptor.getAttribute('UsoCFDI') ? receptor.getAttribute('UsoCFDI').getValue() : '';
-
-    // Extraer impuestos (lógica simplificada)
-    // Una implementación completa requeriría iterar sobre el nodo de Impuestos
-    const impuestosNode = root.getChild('Impuestos', nsCfdi);
-    let totalImpuestosTrasladados = 0;
-    if (impuestosNode && impuestosNode.getAttribute('TotalImpuestosTrasladados')) {
-        totalImpuestosTrasladados = impuestosNode.getAttribute('TotalImpuestosTrasladados').getValue();
+function getTimbreFiscal(xmlContent) {
+    try {
+        const doc = XmlService.parse(xmlContent);
+        const root = doc.getRootElement();
+        const cfdi = root.getNamespace();
+        const tfd = XmlService.getNamespace('tfd', 'http://www.sat.gob.mx/TimbreFiscalDigital');
+        const complemento = root.getChild('Complemento', cfdi);
+        if (!complemento) return {};
+        const timbre = complemento.getChild('TimbreFiscalDigital', tfd);
+        if (!timbre) return {};
+        return {
+            uuid: timbre.getAttribute('UUID')?.getValue(),
+            fechaTimbrado: timbre.getAttribute('FechaTimbrado')?.getValue()
+        };
+    } catch (e) {
+        Logger.log(`No se pudo obtener el Timbre Fiscal: ${e.message}`);
+        return {};
     }
-
-    // Devolver un array en el orden de las columnas de la hoja "XML"
-    return [
-      uuid,
-      emisorRfc,
-      receptorRfc,
-      tipo, // I (Ingreso), E (Egreso), P (Pago)
-      fecha,
-      metodoPago, // PUE, PPD
-      formaPago,
-      subtotal,
-      totalImpuestosTrasladados, // Simplificado
-      total,
-      usoCfdi,
-      moneda,
-      '' // CFDI Relacionado (placeholder)
-    ];
-  } catch (e) {
-    Logger.log(`Error parseando XML: ${e.message}`);
-    return null;
-  }
 }
 
-/**
- * Escribe los datos parseados de múltiples XMLs en la hoja "XML".
- * @param {Array<Array<any>>} dataRows Un array de filas, donde cada fila es un array de datos de un CFDI.
- */
-function updateXmlSheet(dataRows) {
-  if (!dataRows || dataRows.length === 0) {
-    return;
-  }
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(SHEETS.XML);
-  const startRow = sheet.getLastRow() + 1;
-  const numColumns = dataRows[0].length;
+function parsearCFDI(xmlContent, timbreData) {
+  try {
+    const doc = XmlService.parse(xmlContent);
+    const root = doc.getRootElement();
+    const cfdi = root.getNamespace();
 
-  sheet.getRange(startRow, 1, dataRows.length, numColumns).setValues(dataRows);
-  SpreadsheetApp.getUi().alert(`Se procesaron y agregaron ${dataRows.length} CFDI a la hoja "XML".`);
+    const emisor = root.getChild('Emisor', cfdi);
+    const receptor = root.getChild('Receptor', cfdi);
+
+    let cfdiData = {
+      uuid: timbreData.uuid,
+      fecha: root.getAttribute('Fecha').getValue(),
+      tipo: root.getAttribute('TipoDeComprobante').getValue(),
+      formaPago: root.getAttribute('FormaPago')?.getValue() || '',
+      metodoPago: root.getAttribute('MetodoPago')?.getValue() || '',
+      subtotal: parseFloat(root.getAttribute('SubTotal').getValue()),
+      total: parseFloat(root.getAttribute('Total').getValue()),
+      emisorRfc: emisor.getAttribute('Rfc').getValue(),
+      receptorRfc: receptor.getAttribute('Rfc').getValue(),
+      ivaTrasladado: 0,
+      ivaRetenido: 0,
+      pagoIvaTrasladado: 0, // Campo específico para IVA en Complemento de Pago
+      uuidRelacionado: null,
+      claveProdServ: '',
+      usoCFDI: receptor.getAttribute('UsoCFDI').getValue()
+    };
+
+    // --- Impuestos Generales (para Facturas I y E) ---
+    const impuestosNode = root.getChild('Impuestos', cfdi);
+    if (impuestosNode) {
+        (impuestosNode.getChild('Traslados', cfdi)?.getChildren('Traslado', cfdi) || []).forEach(t => {
+            if (t.getAttribute('Impuesto').getValue() === '002') cfdiData.ivaTrasladado += parseFloat(t.getAttribute('Importe').getValue());
+        });
+        (impuestosNode.getChild('Retenciones', cfdi)?.getChildren('Retencion', cfdi) || []).forEach(r => {
+            if (r.getAttribute('Impuesto').getValue() === '002') cfdiData.ivaRetenido += parseFloat(r.getAttribute('Importe').getValue());
+        });
+    }
+
+    // --- CFDI Relacionado ---
+    const cfdiRelacionadosNode = root.getChild('CfdiRelacionados', cfdi);
+    if (cfdiRelacionadosNode) {
+      cfdiData.uuidRelacionado = cfdiRelacionadosNode.getChild('CfdiRelacionado', cfdi)?.getAttribute('UUID').getValue();
+    }
+
+    // --- Conceptos (para Facturas I y E) ---
+    const primerConcepto = root.getChild('Conceptos', cfdi)?.getChild('Concepto', cfdi);
+    if (primerConcepto) cfdiData.claveProdServ = primerConcepto.getAttribute('ClaveProdServ').getValue();
+
+    // --- Lógica Específica para Complemento de Pago (Tipo 'P') ---
+    if (cfdiData.tipo === 'P') {
+        const complemento = root.getChild('Complemento', cfdi);
+        const pago20 = XmlService.getNamespace('pago20', 'http://www.sat.gob.mx/Pagos20');
+        const pagos = complemento.getChild('Pagos', pago20);
+        if (pagos) {
+            const pago = pagos.getChild('Pago', pago20);
+            // Tomamos el UUID del primer documento relacionado en el pago, que es lo más común.
+            cfdiData.uuidRelacionado = pago.getChild('DoctoRelacionado', pago20)?.getAttribute('IdDocumento').getValue();
+
+            const impuestosP = pago.getChild('ImpuestosP', pago20);
+            if (impuestosP) {
+                (impuestosP.getChild('TrasladosP', pago20)?.getChildren('TrasladoP', pago20) || []).forEach(t => {
+                    if (t.getAttribute('ImpuestoP').getValue() === '002') { // IVA
+                        cfdiData.pagoIvaTrasladado += parseFloat(t.getAttribute('ImporteP').getValue());
+                    }
+                });
+            }
+        }
+    }
+
+    // --- Validación de Integridad (solo para facturas tipo I y E) ---
+    if (cfdiData.tipo !== 'P') {
+        const totalCalculado = cfdiData.subtotal + cfdiData.ivaTrasladado - cfdiData.ivaRetenido;
+        if (Math.abs(totalCalculado - cfdiData.total) > 0.02) {
+            Logger.log(`ERROR DE VALIDACIÓN: El total no cuadra en ${cfdiData.uuid}. Calculado: ${totalCalculado}, Declarado: ${cfdiData.total}`);
+            return null;
+        }
+    }
+
+    return cfdiData;
+  } catch (e) {
+    Logger.log(`Error crítico al parsear CFDI con UUID ${timbreData.uuid}: ${e.stack}`);
+    return null;
+  }
 }

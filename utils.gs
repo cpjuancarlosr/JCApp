@@ -1,12 +1,47 @@
 /**
  * @file utils.gs
  * @description Módulo de utilidades. Contiene funciones auxiliares de propósito general
- * que son utilizadas por otros módulos en el proyecto. Por ejemplo, validación de datos,
- * formato de fechas, creación de bitácoras, etc.
+ * que son utilizadas por otros módulos en el proyecto.
  *
  * @author Jules
- * @version 1.0.0
+ * @version 1.1.0
  */
+
+// Cache para almacenar la configuración y evitar lecturas repetidas de la hoja.
+const SCRIPT_CACHE = CacheService.getScriptCache();
+const CONFIG_CACHE_KEY = 'contabilidad_config';
+
+/**
+ * Obtiene los parámetros de la hoja "Configuración" y los devuelve como un objeto.
+ * Utiliza caché para mejorar el rendimiento en ejecuciones sucesivas.
+ *
+ * @returns {object} Un objeto con la configuración, ej: { 'Periodo Contable Actual (YYYY-MM)': '2023-12', RFC: '...' }.
+ */
+function getContabilidadConfig() {
+  const cachedConfig = SCRIPT_CACHE.get(CONFIG_CACHE_KEY);
+  if (cachedConfig) {
+    return JSON.parse(cachedConfig);
+  }
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Configuración');
+  if (!sheet) {
+    throw new Error('La hoja "Configuración" no se encuentra. Ejecute la configuración del menú.');
+  }
+
+  const data = sheet.getRange('A2:B' + sheet.getLastRow()).getValues();
+  const config = {};
+
+  data.forEach(row => {
+    if (row[0] && row[1]) {
+      config[row[0].trim()] = row[1].toString().trim();
+    }
+  });
+
+  // Guardar en caché por 10 minutos.
+  SCRIPT_CACHE.put(CONFIG_CACHE_KEY, JSON.stringify(config), 600);
+
+  return config;
+}
 
 /**
  * Valida si un valor es un RFC válido (formato básico).
@@ -17,7 +52,6 @@ function isValidRfc(rfc) {
   if (!rfc || typeof rfc !== 'string') {
     return false;
   }
-  // Expresión regular para RFC de persona física o moral (sin validación de homoclave).
   const rfcRegex = /^[A-Z&Ñ]{3,4}\d{6}[A-Z\d]{3}$/i;
   return rfcRegex.test(rfc);
 }
