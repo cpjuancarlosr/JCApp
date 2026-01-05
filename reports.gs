@@ -1,63 +1,163 @@
 /**
  * @file reports.gs
  * @description Módulo para la generación de reportes financieros.
- * Contiene funciones para refrescar tablas dinámicas, aplicar fórmulas matriciales
- * y calcular los KPIs que se mostrarán en el dashboard "Inicio".
  *
  * @author Jules
- * @version 1.0.0
+ * @version 3.0.0
  */
 
-/**
- * Coloca las fórmulas para los reportes financieros dinámicos en la hoja "Inicio".
- */
-function setupFinancialReports() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const homeSheet = ss.getSheetByName(SHEETS.HOME);
-  if (!homeSheet) {
-    SpreadsheetApp.getUi().alert('Error', `No se encuentra la hoja "${SHEETS.HOME}". Por favor, ejecute la configuración de hojas primero.`);
-    return;
-  }
+// --- Funciones Públicas (llamadas desde la UI) ---
 
-  // Limpiar área de reportes (ej. columnas K en adelante)
-  homeSheet.getRange('K:Z').clear();
-
-  // --- Balanza de Comprobación ---
-  const balanceTitleCell = homeSheet.getRange('K1');
-  balanceTitleCell.setValue('Balanza de Comprobación (Saldos)');
-  formatAsTitle(balanceTitleCell.mergeTo('N1'));
-
-  const balanceHeaderCell = homeSheet.getRange('K2');
-  const balanceFormulaCell = homeSheet.getRange('K3');
-  const polizasRange = `'${SHEETS.POLIZAS}'!D:I`; // Rango de Cuenta, Subcuenta, ..., Debe, Haber
-
-  // Encabezados
-  balanceHeaderCell.setValues([['Cuenta', 'Debe', 'Haber', 'Saldo Final']]);
-  formatAsHeader(homeSheet.getRange('K2:N2'));
-
-  // Fórmula QUERY para la balanza
-  const balanceFormula = `=QUERY(${polizasRange}, "SELECT D, SUM(H), SUM(I), SUM(H)-SUM(I) WHERE D IS NOT NULL GROUP BY D ORDER BY D LABEL D 'Cuenta', SUM(H) 'Debe', SUM(I) 'Haber', SUM(H)-SUM(I) 'Saldo Final'")`;
-  balanceFormulaCell.setFormula(balanceFormula);
-
-  // --- Estado de Resultados ---
-  const incomeTitleCell = homeSheet.getRange('P1');
-  incomeTitleCell.setValue('Estado de Resultados');
-  formatAsTitle(incomeTitleCell.mergeTo('R1'));
-
-  const incomeHeaderCell = homeSheet.getRange('P2');
-  const incomeFormulaCell = homeSheet.getRange('P3');
-
-  // Encabezados
-  incomeHeaderCell.setValues([['Cuenta', 'Concepto', 'Saldo']]);
-  formatAsHeader(homeSheet.getRange('P2:R2'));
-
-  // Fórmula QUERY para el estado de resultados
-  // Se une con la hoja de Cuentas para traer el nombre de la cuenta.
-  const incomeFormula = `=QUERY({QUERY(${polizasRange}, "SELECT D, SUM(I)-SUM(H) WHERE D >= '4' AND D < '6' GROUP BY D"), VLOOKUP(QUERY(${polizasRange}, "SELECT D WHERE D >= '4' AND D < '6' GROUP BY D LABEL D ''"), '${SHEETS.CUENTAS}'!A:B, 2, FALSE)}, "SELECT Col2, Col1, Col3 LABEL Col2 'Cuenta', Col1 'Concepto', Col3 'Saldo' FORMAT Col3 '$#,##0.00'")`;
-
-  // Fórmula más simple sin VLOOKUP por si Cuentas no está poblada
-  const simpleIncomeFormula = `=QUERY(${polizasRange}, "SELECT D, SUM(I)-SUM(H) WHERE D IS NOT NULL AND (D LIKE '4%' OR D LIKE '5%') GROUP BY D LABEL D 'Cuenta', SUM(I)-SUM(H) 'Saldo'")`;
-  incomeFormulaCell.setFormula(simpleIncomeFormula);
-
-  SpreadsheetApp.getUi().alert('Reportes Actualizados', 'Las fórmulas de los reportes dinámicos han sido colocadas en la hoja "Inicio".', SpreadsheetApp.getUi().ButtonSet.OK);
+function generarBalanzaDeComprobacion() {
+  const periodo = getConfiguracion_('Periodo Contable Actual (YYYY-MM)');
+  SpreadsheetApp.getActiveSpreadsheet().toast(`Generando Balanza para ${periodo}...`, 'Proceso', -1);
+  const catalogo = leerHoja_('Catálogo de Cuentas'), polizas = leerHoja_('Pólizas');
+  const balanzaData = procesarDatosParaBalanza_(catalogo, polizas, periodo);
+  escribirReporteBalanza_(balanzaData);
+  SpreadsheetApp.getActiveSpreadsheet().toast('Balanza generada con éxito.');
+  return { status: 'success', message: `Balanza de Comprobación generada para ${periodo}.` };
 }
+
+function generarBalanceGeneral() {
+  const periodo = getConfiguracion_('Periodo Contable Actual (YYYY-MM)');
+  SpreadsheetApp.getActiveSpreadsheet().toast(`Generando Balance General para ${periodo}...`, 'Proceso', -1);
+  generarBalanzaDeComprobacion();
+  const catalogo = leerHoja_('Catálogo de Cuentas'), balanza = leerHoja_('Balanza de Comprobación');
+  const reporteData = construirBalanceGeneral_(catalogo, balanza, 0); // Asume resultado del ejercicio 0 por ahora
+  escribirReporteGeneral_('Balance General', reporteData, ['A', 'B', 'C']);
+  SpreadsheetApp.getActiveSpreadsheet().toast('Balance General generado.');
+  return { status: 'success', message: `Balance General generado para ${periodo}.` };
+}
+
+function generarEstadoDeResultados() {
+  const periodo = getConfiguracion_('Periodo Contable Actual (YYYY-MM)');
+  SpreadsheetApp.getActiveSpreadsheet().toast(`Generando Estado de Resultados para ${periodo}...`, 'Proceso', -1);
+  generarBalanzaDeComprobacion();
+  const catalogo = leerHoja_('Catálogo de Cuentas'), balanza = leerHoja_('Balanza de Comprobación');
+  const [reporteData, resultadoNeto] = construirEstadoDeResultados_(catalogo, balanza);
+  escribirReporteGeneral_('Estado de Resultados', reporteData, ['A', 'B']);
+
+  // Re-generar Balance General con el resultado del ejercicio correcto
+  const reporteBalance = construirBalanceGeneral_(catalogo, balanza, resultadoNeto);
+  escribirReporteGeneral_('Balance General', reporteBalance, ['A', 'B', 'C']);
+
+  SpreadsheetApp.getActiveSpreadsheet().toast('Reportes financieros actualizados.');
+  return { status: 'success', message: `Estado de Resultados (y Balance) generado para ${periodo}.` };
+}
+
+// --- Lógica de Procesamiento ---
+
+function procesarDatosParaBalanza_(catalogo, polizas, periodo) {
+  const cuentasMap = new Map();
+  catalogo.slice(1).forEach(row => {
+    cuentasMap.set(row[0].toString(), { n: row[1], sI: 0, d: 0, h: 0, nat: row[4] });
+  });
+  polizas.slice(1).forEach(row => {
+    if (row[0].toISOString().substring(0, 7) === periodo) {
+      const cta = cuentasMap.get(row[3].toString());
+      if (cta) { cta.d += parseFloat(row[5] || 0); cta.h += parseFloat(row[6] || 0); }
+    }
+  });
+  return Array.from(cuentasMap)
+    .filter(([_, data]) => data.d !== 0 || data.h !== 0)
+    .map(([num, data]) => [num, data.n, 0, data.d, data.h, data.nat === 'Deudora' ? data.d - data.h : data.h - data.d]);
+}
+
+function construirEstadoDeResultados_(catalogo, balanza) {
+    const cuentasInfo = new Map(catalogo.slice(1).map(r => [r[0].toString(), { tipo: r[2] }]));
+    const saldos = new Map(balanza.slice(1).map(r => [r[0].toString(), { nombre: r[1], saldo: r[5] }]));
+
+    let totalIngresos = 0, totalCostos = 0, totalGastos = 0;
+    const reporte = [['ESTADO DE RESULTADOS', '']];
+
+    reporte.push(['Ingresos', '']);
+    saldos.forEach((data, cuenta) => {
+        if (cuentasInfo.get(cuenta)?.tipo === 'INGRESO') {
+            reporte.push([`  ${data.nombre}`, data.saldo]);
+            totalIngresos += data.saldo;
+        }
+    });
+    reporte.push(['TOTAL INGRESOS', totalIngresos]);
+    reporte.push(['', '']);
+
+    reporte.push(['Costos', '']);
+    saldos.forEach((data, cuenta) => {
+        if (cuentasInfo.get(cuenta)?.tipo === 'COSTO') {
+            reporte.push([`  ${data.nombre}`, data.saldo]);
+            totalCostos += data.saldo;
+        }
+    });
+    reporte.push(['TOTAL COSTOS', totalCostos]);
+    reporte.push(['UTILIDAD BRUTA', totalIngresos - totalCostos]);
+    reporte.push(['', '']);
+
+    reporte.push(['Gastos', '']);
+     saldos.forEach((data, cuenta) => {
+        if (cuentasInfo.get(cuenta)?.tipo === 'GASTO') {
+            reporte.push([`  ${data.nombre}`, data.saldo]);
+            totalGastos += data.saldo;
+        }
+    });
+    reporte.push(['TOTAL GASTOS', totalGastos]);
+    reporte.push(['', '']);
+
+    const resultadoNeto = totalIngresos - totalCostos - totalGastos;
+    reporte.push(['RESULTADO NETO DEL EJERCICIO', resultadoNeto]);
+
+    return [reporte, resultadoNeto];
+}
+
+function construirBalanceGeneral_(catalogo, balanza, resultadoDelEjercicio) {
+    const cuentasInfo = new Map(catalogo.slice(1).map(r => [r[0].toString(), { t: r[2], st: r[3] }]));
+    const saldos = new Map(balanza.slice(1).map(r => [r[0].toString(), { n: r[1], s: r[5] }]));
+    const estructura = { 'ACTIVO': {}, 'PASIVO': {}, 'CAPITAL': {} };
+    let totales = { 'ACTIVO': 0, 'PASIVO': 0, 'CAPITAL': 0 };
+
+    saldos.forEach((data, cta) => {
+        const info = cuentasInfo.get(cta);
+        if (info && estructura[info.t]) {
+            if (!estructura[info.t][info.st]) estructura[info.t][info.st] = [];
+            estructura[info.t][info.st].push([`   ${cta}`, data.n, data.s]);
+            totales[info.t] += data.s;
+        }
+    });
+
+    let reporte = [];
+    ['ACTIVO', 'PASIVO', 'CAPITAL'].forEach(tipo => {
+        reporte.push([tipo, '', '']);
+        for (const subtipo in estructura[tipo]) {
+            reporte.push([` ${subtipo}`, '', estructura[tipo][subtipo].reduce((acc, curr) => acc + curr[2], 0)]);
+            reporte.push(...estructura[tipo][subtipo]);
+        }
+        if (tipo === 'CAPITAL') {
+            reporte.push(['  Resultado del Ejercicio', '', resultadoDelEjercicio]);
+            totales.CAPITAL += resultadoDelEjercicio;
+        }
+        reporte.push([`TOTAL ${tipo}`, '', totales[tipo]]);
+        reporte.push(['', '', '']);
+    });
+
+    reporte.push(['TOTAL PASIVO + CAPITAL', '', totales.PASIVO + totales.CAPITAL]);
+    return reporte;
+}
+
+// --- Helpers de Hojas ---
+
+function escribirReporteBalanza_(balanzaData) {
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Balanza de Comprobación');
+  sheet.clearContents().getRange(1, 1, 1, 6).setValues([['Cuenta', 'Nombre', 'S. Inicial', 'Debe', 'Haber', 'S. Final']]).setFontWeight('bold');
+  if (balanzaData.length > 0) sheet.getRange(2, 1, balanzaData.length, 6).setValues(balanzaData).setNumberFormat('"$"#,##0.00');
+  sheet.autoResizeColumns(1, 2);
+}
+
+function escribirReporteGeneral_(sheetName, data, columns) {
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+    sheet.clearContents();
+    sheet.getRange(1, 1, data.length, columns.length).setValues(data);
+    sheet.getRange(`${columns[columns.length - 1]}:${columns[columns.length - 1]}`).setNumberFormat('"$"#,##0.00');
+    sheet.getRange("A1:C1").setFontWeight('bold');
+    sheet.autoResizeColumns(1, columns.length);
+}
+
+function leerHoja_(sheetName) { return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName).getDataRange().getValues(); }
+function getConfiguracion_(param) { return getContabilidadConfig()[param]; }

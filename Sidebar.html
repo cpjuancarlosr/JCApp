@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    :root {
+      --bg-color: #121212;
+      --primary-text-color: #FFFFFF;
+      --accent-color: #00FF00;
+      --border-color: #333333;
+      --button-bg-color: transparent;
+      --button-hover-bg: #222222;
+      --input-bg-color: #1A1A1A;
+    }
+
+    body {
+      font-family: 'Courier New', Courier, monospace;
+      background-color: var(--bg-color);
+      color: var(--primary-text-color);
+      margin: 0;
+      padding: 15px;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    h2, h3 {
+      color: var(--primary-text-color);
+      border-bottom: 1px solid var(--accent-color);
+      padding-bottom: 5px;
+      margin-top: 20px;
+    }
+
+    button {
+      background-color: var(--button-bg-color);
+      color: var(--accent-color);
+      border: 1px solid var(--accent-color);
+      padding: 10px 15px;
+      cursor: pointer;
+      font-family: inherit;
+      text-transform: uppercase;
+      width: 100%;
+      margin-top: 10px;
+      transition: background-color 0.3s, color 0.3s;
+    }
+
+    button:hover {
+      background-color: var(--accent-color);
+      color: var(--bg-color);
+    }
+
+    button:disabled {
+      border-color: var(--border-color);
+      color: var(--border-color);
+      cursor: not-allowed;
+    }
+
+    #file-upload-section {
+      margin-bottom: 20px;
+    }
+
+    /* Style the file input button */
+    input[type="file"] {
+      display: none;
+    }
+    .file-upload-label {
+      display: inline-block;
+      padding: 10px 15px;
+      border: 1px solid var(--accent-color);
+      cursor: pointer;
+      text-align: center;
+      width: calc(100% - 32px); /* Adjust for padding and border */
+    }
+    .file-upload-label:hover {
+      background-color: var(--accent-color);
+      color: var(--bg-color);
+    }
+    #file-name {
+        margin-top: 10px;
+        font-style: italic;
+        color: #888;
+    }
+
+    #log-container {
+      flex-grow: 1;
+      background-color: #000000;
+      border: 1px solid var(--border-color);
+      padding: 10px;
+      overflow-y: auto;
+      font-size: 12px;
+      margin-top: 15px;
+      height: 150px;
+    }
+
+    .log-entry {
+      margin-bottom: 5px;
+    }
+    .log-success { color: #2E8B57; } /* SeaGreen */
+    .log-error { color: #FF4500; } /* OrangeRed */
+    .log-info { color: #87CEEB; } /* SkyBlue */
+
+  </style>
+</head>
+<body>
+  <h2>Panel de Control</h2>
+
+  <div id="file-upload-section">
+    <h3>1. Cargar CFDI (XML)</h3>
+    <label for="xml-files" class="file-upload-label">Seleccionar Archivos...</label>
+    <input type="file" id="xml-files" accept=".xml" multiple>
+    <div id="file-name">0 archivos seleccionados</div>
+    <button id="process-button" disabled>Procesar Archivos</button>
+  </div>
+
+  <div id="reports-section">
+    <h3>2. Generar Reportes</h3>
+    <button id="run-balanza-button">Balanza de Comprobación</button>
+    <button id="run-balance-general-button">Balance General</button>
+    <button id="run-edo-resultados-button">Estado de Resultados</button>
+  </div>
+
+  <h3>Log de Actividad</h3>
+  <div id="log-container">
+     <div class="log-entry log-info">Bienvenido. Seleccione archivos XML para comenzar.</div>
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('xml-files');
+    const processButton = document.getElementById('process-button');
+    const fileNameDisplay = document.getElementById('file-name');
+    const logContainer = document.getElementById('log-container');
+
+    // Habilitar el botón de procesar solo si hay archivos seleccionados
+    fileInput.addEventListener('change', () => {
+      const numFiles = fileInput.files.length;
+      fileNameDisplay.textContent = `${numFiles} archivo(s) seleccionado(s).`;
+      processButton.disabled = numFiles === 0;
+    });
+
+    // Lógica de procesamiento de archivos
+    processButton.addEventListener('click', () => {
+      if (fileInput.files.length === 0) {
+        log('Por favor, seleccione archivos XML primero.', 'error');
+        return;
+      }
+
+      setLoadingState(true);
+      log(`Iniciando procesamiento de ${fileInput.files.length} archivo(s)...`);
+
+      const filePromises = Array.from(fileInput.files).map(file => {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = e => resolve({ name: file.name, content: e.target.result });
+          reader.onerror = error => reject(error);
+          reader.readAsText(file);
+        });
+      });
+
+      Promise.all(filePromises)
+        .then(files => {
+          // Llamada a la función del backend de Apps Script
+          google.script.run
+            .withSuccessHandler(response => {
+              // El backend devuelve un objeto { status: 'success'/'error', message: '...' }
+              log(response.message, response.status);
+              setLoadingState(false);
+              // Limpiar selección de archivos después de procesar
+              fileInput.value = '';
+              fileNameDisplay.textContent = '0 archivos seleccionados.';
+            })
+            .withFailureHandler(error => {
+              log(`Error de comunicación con el servidor: ${error.message}`, 'error');
+              setLoadingState(false);
+            })
+            .procesarContenidoXMLs(files);
+
+        })
+        .catch(error => {
+          log(`Error al leer archivos: ${error.message}`, 'error');
+          setLoadingState(false);
+        });
+    });
+
+    // --- Lógica para botones de reportes ---
+    document.getElementById('run-balanza-button').addEventListener('click', () => {
+        setLoadingState(true);
+        log('Solicitando Balanza de Comprobación...', 'info');
+        google.script.run
+            .withSuccessHandler(response => {
+                log(response.message, response.status);
+                setLoadingState(false);
+            })
+            .withFailureHandler(error => {
+                log(`Error: ${error.message}`, 'error');
+                setLoadingState(false);
+            })
+            .generarBalanzaDeComprobacion();
+    });
+    document.getElementById('run-balance-general-button').addEventListener('click', () => {
+        setLoadingState(true);
+        log('Solicitando Balance General...', 'info');
+        google.script.run
+            .withSuccessHandler(response => {
+                log(response.message, response.status);
+                setLoadingState(false);
+            })
+            .withFailureHandler(error => {
+                log(`Error: ${error.message}`, 'error');
+                setLoadingState(false);
+            })
+            .generarBalanceGeneral();
+    });
+    document.getElementById('run-edo-resultados-button').addEventListener('click', () => {
+        setLoadingState(true);
+        log('Solicitando Estado de Resultados...', 'info');
+        google.script.run
+            .withSuccessHandler(response => {
+                log(response.message, response.status);
+                setLoadingState(false);
+            })
+            .withFailureHandler(error => {
+                log(`Error: ${error.message}`, 'error');
+                setLoadingState(false);
+            })
+            .generarEstadoDeResultados();
+    });
+
+
+    // --- Funciones de Utilidad ---
+
+    function log(message, type = 'info') {
+      const entry = document.createElement('div');
+      entry.className = `log-entry log-${type}`;
+      entry.textContent = `> ${new Date().toLocaleTimeString()}: ${message}`;
+      logContainer.appendChild(entry);
+      logContainer.scrollTop = logContainer.scrollHeight; // Auto-scroll
+    }
+
+    function setLoadingState(isLoading) {
+      document.querySelectorAll('button').forEach(btn => btn.disabled = isLoading);
+      if (isLoading) {
+          log('Procesando, por favor espere...', 'info');
+      } else {
+          // Reactivar el botón de proceso solo si hay archivos
+          processButton.disabled = fileInput.files.length === 0;
+      }
+    }
+
+  </script>
+</body>
+</html>
